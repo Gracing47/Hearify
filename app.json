@@ -10,11 +10,13 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
+      "bundleIdentifier": "com.blexx.hearify",
       "infoPlist": {
         "NSMicrophoneUsageDescription": "Hearify needs access to your microphone to capture your voice and create a neural memory."
       }
     },
     "android": {
+      "package": "com.blexx.hearify",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -46,8 +48,13 @@
         }
       ],
       "expo-secure-store",
-      "expo-sqlite",
-      "expo-audio"
+      "expo-audio",
+      [
+        "@op-engineering/op-sqlite",
+        {
+          "sqliteVec": true
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

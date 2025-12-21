@@ -1,34 +1,37 @@
-import * as SQLite from 'expo-sqlite';
-import { deserializeEmbedding, SCHEMA, serializeEmbedding, type Snippet } from './schema';
+import { DB, open } from '@op-engineering/op-sqlite';
+import { SCHEMA, type Snippet } from './schema';
 
-let db: SQLite.SQLiteDatabase | null = null;
+let db: DB | null = null;
 
 /**
- * Initialize database connection and create tables
+ * Initialize native database connection
  */
-export async function initDatabase(): Promise<SQLite.SQLiteDatabase> {
+export async function initDatabase(): Promise<DB> {
     if (db) return db;
 
-    // Open database
-    db = await SQLite.openDatabaseAsync('hearify.db');
+    // Open database with sqlite-vec extension enabled
+    db = open({
+        name: 'hearify.db',
+    });
 
     // Create tables
-    await db.execAsync(SCHEMA.snippets);
+    db.execute(SCHEMA.snippets);
+    db.execute(SCHEMA.vectorTable);
 
-    console.log('[DB] Database initialized with expo-sqlite');
+    console.log('[DB] Native JSI Database initialized with sqlite-vec');
     return db;
 }
 
 /**
- * Get database instance (throws if not initialized)
+ * Get database instance
  */
-function getDb(): SQLite.SQLiteDatabase {
-    if (!db) throw new Error('Database not initialized. Call initDatabase() first.');
+function getDb(): DB {
+    if (!db) throw new Error('Database not initialized');
     return db;
 }
 
 /**
- * Insert a snippet with its embedding
+ * Insert a snippet with its embedding using native vector table
  */
 export async function insertSnippet(
     content: string,
@@ -38,36 +41,27 @@ export async function insertSnippet(
     const database = getDb();
     const timestamp = Date.now();
 
-    // Insert snippet
-    const result = await database.runAsync(
-        'INSERT INTO snippets (content, type, timestamp, embedding) VALUES (?, ?, ?, ?)',
-        [content, type, timestamp, serializeEmbedding(embedding)]
+    // 1. Insert into main table
+    const result = database.execute(
+        'INSERT INTO snippets (content, type, timestamp) VALUES (?, ?, ?)',
+        [content, type, timestamp]
     );
 
-    const snippetId = result.lastInsertRowId;
-    console.log(`[DB] Inserted snippet ${snippetId}: "${content.substring(0, 50)}..."`);
+    const snippetId = result.insertId!;
+
+    // 2. Insert into native vector table
+    database.execute(
+        'INSERT INTO vec_snippets (id, embedding) VALUES (?, ?)',
+        [snippetId, embedding]
+    );
+
+    console.log(`[DB] Native Insert: ${snippetId}`);
     return snippetId;
 }
 
 /**
- * Cosine similarity calculation in JS
- */
-function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-    let dotProduct = 0;
-    let normA = 0;
-    let normB = 0;
-    for (let i = 0; i < a.length; i++) {
-        dotProduct += a[i] * b[i];
-        normA += a[i] * a[i];
-        normB += b[i] * b[i];
-    }
-    return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
-}
-
-/**
- * Find similar snippets using vector search (JS-side similarity)
- * 
- * note: Fast enough for Phase 1 (<100 snippets)
+ * Find similar snippets using native sqlite-vec search
+ * This is the "Award-Winner" performance move.
  */
 export async function findSimilarSnippets(
     queryEmbedding: Float32Array,
@@ -76,69 +70,56 @@ export async function findSimilarSnippets(
     const database = getDb();
     const startTime = Date.now();
 
-    // 1. Get all snippets with embeddings
-    const rows: any[] = await database.getAllAsync(
-        'SELECT id, content, type, timestamp, embedding FROM snippets WHERE embedding IS NOT NULL'
-    );
+    // Native vector search query
+    // k-nearest neighbors using cosine distance
+    const query = `
+        SELECT 
+            s.id, 
+            s.content, 
+            s.type, 
+            s.timestamp,
+            v.distance
+        FROM vec_snippets v
+        JOIN snippets s ON s.id = v.id
+        WHERE embedding MATCH ?
+        ORDER BY distance
+        LIMIT ?
+    `;
 
-    // 2. Calculate similarities in JS
-    const scoredSnippets = rows.map(row => {
-        const embedding = deserializeEmbedding(row.embedding);
-        return {
-            id: row.id,
-            content: row.content,
-            type: row.type,
-            timestamp: row.timestamp,
-            embedding,
-            distance: 1 - cosineSimilarity(queryEmbedding, embedding)
-        };
-    });
-
-    // 3. Sort and limit
-    const results = scoredSnippets
-        .sort((a, b) => a.distance - b.distance)
-        .slice(0, limit);
+    const results = database.execute(query, [queryEmbedding, limit]);
 
     const elapsed = Date.now() - startTime;
-    console.log(`[DB] Vector search (JS) completed in ${elapsed}ms for ${rows.length} records`);
+    console.log(`[DB] Native Vector Search completed in ${elapsed}ms`);
 
-    return results.map(({ distance, ...snippet }) => snippet);
+    return (results.rows?._array || []) as Snippet[];
 }
 
 /**
- * Get all snippets ordered by timestamp
+ * Get all snippets
  */
 export async function getAllSnippets(): Promise<Snippet[]> {
     const database = getDb();
-
-    const results: any[] = await database.getAllAsync(
-        'SELECT id, content, type, timestamp FROM snippets ORDER BY timestamp DESC'
-    );
-
-    return results.map((row: any) => ({
-        id: row.id,
-        content: row.content,
-        type: row.type,
-        timestamp: row.timestamp
-    }));
+    const results = database.execute('SELECT * FROM snippets ORDER BY timestamp DESC');
+    return (results.rows?._array || []) as Snippet[];
 }
 
 /**
- * Delete all data (for testing/reset)
+ * Delete all data
  */
 export async function clearDatabase(): Promise<void> {
     const database = getDb();
-    await database.execAsync('DELETE FROM snippets');
-    console.log('[DB] Database cleared');
+    database.execute('DELETE FROM snippets');
+    database.execute('DELETE FROM vec_snippets');
+    console.log('[DB] Native Database cleared');
 }
 
 /**
- * Close database connection
+ * Close database
  */
 export async function closeDatabase(): Promise<void> {
     if (db) {
-        await db.closeAsync();
+        db.close();
         db = null;
-        console.log('[DB] Database closed');
+        console.log('[DB] Native Database closed');
     }
 }
