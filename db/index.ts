@@ -15,8 +15,8 @@ export async function initDatabase(): Promise<DB> {
     });
 
     // Create tables
-    db.execute(SCHEMA.snippets);
-    db.execute(SCHEMA.vectorTable);
+    await db.execute(SCHEMA.snippets);
+    await db.execute(SCHEMA.vectorTable);
 
     console.log('[DB] Native JSI Database initialized with sqlite-vec');
     return db;
@@ -42,7 +42,7 @@ export async function insertSnippet(
     const timestamp = Date.now();
 
     // 1. Insert into main table
-    const result = database.execute(
+    const result = await database.execute(
         'INSERT INTO snippets (content, type, timestamp) VALUES (?, ?, ?)',
         [content, type, timestamp]
     );
@@ -50,7 +50,7 @@ export async function insertSnippet(
     const snippetId = result.insertId!;
 
     // 2. Insert into native vector table
-    database.execute(
+    await database.execute(
         'INSERT INTO vec_snippets (id, embedding) VALUES (?, ?)',
         [snippetId, embedding]
     );
@@ -86,12 +86,12 @@ export async function findSimilarSnippets(
         LIMIT ?
     `;
 
-    const results = database.execute(query, [queryEmbedding, limit]);
+    const results = await database.execute(query, [queryEmbedding, limit]);
 
     const elapsed = Date.now() - startTime;
     console.log(`[DB] Native Vector Search completed in ${elapsed}ms`);
 
-    return (results.rows?._array || []) as Snippet[];
+    return (results.rows as unknown as Snippet[]) || [];
 }
 
 /**
@@ -99,8 +99,8 @@ export async function findSimilarSnippets(
  */
 export async function getAllSnippets(): Promise<Snippet[]> {
     const database = getDb();
-    const results = database.execute('SELECT * FROM snippets ORDER BY timestamp DESC');
-    return (results.rows?._array || []) as Snippet[];
+    const results = await database.execute('SELECT * FROM snippets ORDER BY timestamp DESC');
+    return (results.rows as unknown as Snippet[]) || [];
 }
 
 /**
@@ -108,8 +108,8 @@ export async function getAllSnippets(): Promise<Snippet[]> {
  */
 export async function clearDatabase(): Promise<void> {
     const database = getDb();
-    database.execute('DELETE FROM snippets');
-    database.execute('DELETE FROM vec_snippets');
+    await database.execute('DELETE FROM snippets');
+    await database.execute('DELETE FROM vec_snippets');
     console.log('[DB] Native Database cleared');
 }
 
