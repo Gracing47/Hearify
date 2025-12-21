@@ -2,8 +2,8 @@
  * Hearify Main Screen - Neural AI Companion Interface
  */
 
+import { NeuralThinking } from '@/components/NeuralThinking';
 import { useProfileStore } from '@/store/profile';
-import { Link } from 'expo-router';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -26,6 +26,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NeuralConfirmation } from '../../components/NeuralConfirmation';
 import { NeuralOrb } from '../../components/NeuralOrb';
+import { BurgerMenuButton, SideMenu } from '../../components/SideMenu';
 import { areKeysConfigured } from '../../config/api';
 import { findSimilarSnippets, initDatabase, insertSnippet } from '../../db';
 import { useTTS } from '../../hooks/useTTS';
@@ -42,6 +43,7 @@ type AppState = 'idle' | 'listening' | 'processing' | 'speaking';
 export default function HomeScreen() {
   const [appState, setAppState] = useState<AppState>('idle');
   const [isKeysConfigured, setIsKeysConfigured] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
 
   const voiceCapture = useVoiceCapture();
   const tts = useTTS();
@@ -143,18 +145,18 @@ export default function HomeScreen() {
       setTranscribing(false);
       addUserMessage(transcript);
 
-      console.log('[Neural Loop] Step 2: Concurrent Context Retrieval...');
-
+      setEmbedding(true); // Re-use embedding state for retrieval feedback
       const [queryEmbed, isChattyQuery] = await Promise.all([
         generateEmbedding(transcript),
         Promise.resolve(
           transcript.split(' ').length < 15 &&
-          !/will|muss|soll|ziel|plan|merke|notier|fakt|wichtig|wahr/i.test(transcript)
+          !/will|muss|soll|ziel|plan|merke|notier|fakt|wichtig|wahr|wer|was|erinnerst|weißt/i.test(transcript)
         )
       ]);
 
-      const similarSnippets = await findSimilarSnippets(queryEmbed, 3);
+      const similarSnippets = await findSimilarSnippets(queryEmbed, 5);
       const context = similarSnippets.map(s => s.content);
+      setEmbedding(false);
 
       console.log('[Neural Loop] Step 3: Neural Path Execution...');
       let finalResponse = '';
@@ -163,7 +165,7 @@ export default function HomeScreen() {
 
       if (isChattyQuery) {
         console.log('[Neural Loop] Executing Fast Path (Groq)...');
-        const fastResponse = await getFastResponse(transcript, currentProfile?.name);
+        const fastResponse = await getFastResponse(transcript, currentProfile?.name, context);
 
         if (fastResponse.toLowerCase().includes('thinking')) {
           console.log('[Neural Loop] Fast Path suggested reasoning. Switching...');
@@ -194,7 +196,7 @@ export default function HomeScreen() {
 
         for (let i = 0; i < snippets.length; i++) {
           const snippet = snippets[i];
-          await insertSnippet(snippet.content, snippet.type, embeddings[i]);
+          await insertSnippet(snippet.content, snippet.type, embeddings[i], snippet.sentiment, snippet.topic);
           addPendingSnippet({ type: snippet.type, content: snippet.content });
         }
       }
@@ -254,18 +256,21 @@ export default function HomeScreen() {
       ))}
 
       <View style={[styles.safeArea, { paddingTop: insets.top }]}>
-        {/* Minimal Header */}
+        {/* Side Menu */}
+        <SideMenu
+          isOpen={menuOpen}
+          onClose={() => setMenuOpen(false)}
+          activeRoute="home"
+        />
+
+        {/* Minimal Header with Burger */}
         <View style={styles.header}>
+          <BurgerMenuButton onPress={() => setMenuOpen(true)} />
+          <Text style={styles.headerTitle}>Hearify</Text>
           <View style={styles.statusPill}>
             <View style={styles.statusDot} />
-            <Text style={styles.statusText}>R1 ACTIVE</Text>
+            <Text style={styles.statusText}>R1</Text>
           </View>
-          <Text style={styles.headerTitle}>Hearify</Text>
-          <Link href="/explore" asChild>
-            <TouchableOpacity style={styles.settingsButton}>
-              <Text style={styles.settingsIcon}>⚙️</Text>
-            </TouchableOpacity>
-          </Link>
         </View>
 
         {/* Main Content Area */}
@@ -327,22 +332,26 @@ export default function HomeScreen() {
             {isReasoning && (
               <Animated.View entering={FadeInUp} style={[styles.messageWrapper, styles.aiMessageWrapper]}>
                 <View style={[styles.messageBubble, styles.aiBubble, styles.thinkingBubble]}>
-                  <ActivityIndicator size="small" color="#6366f1" />
-                  <Text style={styles.thinkingText}>Denke nach...</Text>
+                  <NeuralThinking />
                 </View>
               </Animated.View>
             )}
           </ScrollView>
         )}
 
-        {/* Floating Input Bar */}
-        <View style={[styles.inputBar, { bottom: insets.bottom + 70 }]}>
+        {/* Floating Input Bar (Antigravity HUD) */}
+        <Animated.View
+          entering={FadeInUp.delay(1000).springify()}
+          style={[styles.inputBar, { bottom: insets.bottom + 20 }]}
+        >
           <View style={styles.inputField}>
             <Text style={styles.inputPlaceholder}>
-              {appState === 'listening' ? '🔴 Ich höre...' :
-                appState === 'processing' ? '⏳ Verarbeite...' :
-                  appState === 'speaking' ? '🔊 Spreche...' :
-                    'Sprich mit mir...'}
+              {appState === 'listening' ? '🔴 System is listening...' :
+                isTranscribing ? '✍️ Decoding neural signal...' :
+                  isEmbedding ? '🧠 Scanning Matrix...' :
+                    isReasoning ? '💭 Pathfinding thoughts...' :
+                      isSpeaking ? '🔊 Synthesizing voice...' :
+                        'Share your consciousness...'}
             </Text>
           </View>
 
@@ -354,7 +363,7 @@ export default function HomeScreen() {
             ]}
             onPress={handleRecordPress}
             disabled={appState === 'processing' || appState === 'speaking'}
-            activeOpacity={0.7}
+            activeOpacity={0.8}
           >
             <Animated.View style={animatedButtonStyle}>
               {appState === 'listening' ? (
@@ -362,11 +371,13 @@ export default function HomeScreen() {
               ) : appState === 'processing' || appState === 'speaking' ? (
                 <ActivityIndicator color="#fff" size="small" />
               ) : (
-                <Text style={styles.micEmoji}>🎤</Text>
+                <View style={styles.micCircle}>
+                  <Text style={styles.micEmoji}>🎤</Text>
+                </View>
               )}
             </Animated.View>
           </TouchableOpacity>
-        </View>
+        </Animated.View>
       </View>
     </View>
   );
@@ -417,22 +428,13 @@ const styles = StyleSheet.create({
     color: '#fff',
     letterSpacing: -0.3,
   },
-  settingsButton: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  settingsIcon: {
-    fontSize: 20,
-  },
   // Welcome Screen - Centered Orb Layout
   welcomeContainer: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 32,
-    marginTop: -60, // Shift content up slightly for visual balance
+    paddingBottom: 80, // Space for input bar
   },
   heroOrbWrapper: {
     marginBottom: 48,
@@ -462,8 +464,10 @@ const styles = StyleSheet.create({
     paddingBottom: 140,
     gap: 12,
   },
+  // Message Bubbles (Liquid Glass)
   messageWrapper: {
     maxWidth: '85%',
+    marginVertical: 4,
   },
   userMessageWrapper: {
     alignSelf: 'flex-end',
@@ -472,80 +476,80 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   messageBubble: {
-    borderRadius: 20,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
+    borderRadius: 22,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
     borderWidth: 1,
-    borderColor: '#2A2A2A',
   },
   userBubble: {
-    backgroundColor: 'rgba(99, 102, 241, 0.15)',
+    backgroundColor: 'rgba(99, 102, 241, 0.12)',
     borderColor: 'rgba(99, 102, 241, 0.3)',
   },
   aiBubble: {
-    backgroundColor: '#1A1A1A',
+    backgroundColor: 'rgba(28, 28, 35, 0.8)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
   reasoningBox: {
-    marginBottom: 10,
-    paddingBottom: 10,
+    marginBottom: 12,
+    paddingBottom: 12,
     borderBottomWidth: 1,
-    borderBottomColor: '#2A2A2A',
+    borderBottomColor: 'rgba(255, 255, 255, 0.05)',
   },
   reasoningLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#6366f1',
+    fontSize: 9,
+    fontWeight: '900',
+    color: '#818cf8',
     marginBottom: 6,
+    letterSpacing: 1.5,
   },
   reasoningText: {
     fontSize: 13,
-    color: '#888',
+    color: 'rgba(255, 255, 255, 0.5)',
     lineHeight: 20,
-    fontStyle: 'italic',
+    fontWeight: '500',
   },
   messageText: {
     fontSize: 16,
-    color: '#fff',
+    color: 'rgba(255, 255, 255, 0.95)',
     lineHeight: 24,
+    fontWeight: '400',
   },
   thinkingBubble: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+    backgroundColor: 'rgba(28, 28, 35, 0.4)',
   },
-  thinkingText: {
-    color: '#888',
-    fontSize: 14,
-  },
-  // Floating Input Bar
+  // Floating Input Bar (HUD)
   inputBar: {
     position: 'absolute',
-    left: 20,
-    right: 20,
+    left: 16,
+    right: 16,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(26, 26, 26, 0.95)',
-    borderRadius: 28,
-    paddingHorizontal: 6,
-    paddingVertical: 6,
+    backgroundColor: 'rgba(18, 18, 24, 0.9)',
+    borderRadius: 32,
+    paddingHorizontal: 8,
+    paddingVertical: 8,
     gap: 8,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: 'rgba(255, 255, 255, 0.12)',
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 5 },
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 10,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.5,
+    shadowRadius: 20,
+    elevation: 15,
   },
   inputField: {
     flex: 1,
-    height: 44,
+    height: 48,
     justifyContent: 'center',
     paddingHorizontal: 16,
   },
   inputPlaceholder: {
     fontSize: 15,
-    color: '#666',
+    color: 'rgba(255, 255, 255, 0.4)',
+    fontWeight: '500',
   },
   micButton: {
     width: 48,
@@ -555,18 +559,25 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     shadowColor: '#6366f1',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 5,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.5,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  micCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   micButtonActive: {
     backgroundColor: '#ef4444',
     shadowColor: '#ef4444',
   },
   micButtonDisabled: {
-    backgroundColor: '#333',
-    opacity: 0.6,
+    backgroundColor: '#222',
+    opacity: 0.4,
     shadowOpacity: 0,
   },
   micEmoji: {

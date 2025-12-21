@@ -80,16 +80,18 @@ export async function insertSnippet(
     content: string,
     type: 'fact' | 'feeling' | 'goal',
     embedding: Float32Array,
+    sentiment: 'analytical' | 'positive' | 'creative' | 'neutral' = 'neutral',
+    topic: string = 'misc',
     x: number = Math.random() * 400 - 200,
     y: number = Math.random() * 400 - 200
 ): Promise<number> {
     const database = getDb();
     const timestamp = Date.now();
 
-    // 1. Insert into main table
+    // 1. Insert into main table with sentiment and topic
     const result = await database.execute(
-        'INSERT INTO snippets (content, type, timestamp, x, y) VALUES (?, ?, ?, ?, ?)',
-        [content, type, timestamp, x, y]
+        'INSERT INTO snippets (content, type, sentiment, topic, timestamp, x, y) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [content, type, sentiment, topic, timestamp, x, y]
     );
 
     const snippetId = result.insertId!;
@@ -100,7 +102,7 @@ export async function insertSnippet(
         [snippetId, embedding]
     );
 
-    console.log(`[DB] Native Insert: ${snippetId} at (${x.toFixed(1)}, ${y.toFixed(1)})`);
+    console.log(`[DB] Native Insert: ${snippetId} [${topic}/${sentiment}] at (${x.toFixed(1)}, ${y.toFixed(1)})`);
     return snippetId;
 }
 
@@ -148,6 +150,30 @@ export async function getAllSnippets(): Promise<Snippet[]> {
     const database = getDb();
     const results = await database.execute('SELECT * FROM snippets ORDER BY timestamp DESC');
     return (results.rows as unknown as Snippet[]) || [];
+}
+
+/**
+ * Get all snippets with their embeddings for the Neural Horizon
+ * Uses JOIN with native vector table
+ */
+export async function getAllSnippetsWithEmbeddings(): Promise<Snippet[]> {
+    const database = getDb();
+    const query = `
+        SELECT 
+            s.*,
+            v.embedding
+        FROM snippets s
+        JOIN vec_snippets v ON s.id = v.id
+        ORDER BY s.timestamp DESC
+    `;
+    const results = await database.execute(query);
+
+    // Rows returned by op-sqlite are objects, we need to ensure embedding is Float32Array
+    const rows = results.rows || [];
+    return rows.map(row => ({
+        ...row,
+        embedding: row.embedding ? new Float32Array(row.embedding as ArrayBuffer) : undefined
+    })) as unknown as Snippet[];
 }
 
 /**

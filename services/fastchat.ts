@@ -7,32 +7,31 @@ import { getGroqKey } from '../config/api';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const FAST_MODEL = 'llama-3.3-70b-versatile'; // Updated to current Groq model
 
-function buildSystemPrompt(userName?: string): string {
-    const userContext = userName ? `\n\nIMPORTANT: The user's name is "${userName}". Use their name naturally in conversation when appropriate.` : '';
+function buildSystemPrompt(userName?: string, context: string[] = []): string {
+    const userContext = userName ? `\n\nUSER IDENTITY: Your primary companion is "${userName}". Use their name naturally when appropriate.` : '';
+    const memoryContext = context.length > 0
+        ? `\n\nNEURAL MEMORY: You have access to the following insights from the user's memory horizon:\n${context.join('\n')}\nUse these to provide personalized, relevant responses.`
+        : '';
 
     return `You are Hearify, a warm and ultra-intelligent neural companion.
-Your goal is to handle as much conversation as possible instantly.
+Your goal is to handle conversation instantly while demonstrating that you "remember" the user.
 
 STRICT INSTRUCTIONS:
 1. Use FAST response for:
    - Greetings, casual chat, and social banter.
-   - Simple facts ("How tall is Everest?").
-   - Checking status or simple instructions ("Set a reminder", "How are you?").
-   - Short questions that don't require logic or multi-step reasoning.
-   - Confirmations and acknowledgments.
+   - Simple facts or questions related to stored memories.
+   - Checking status or simple instructions.
 
 2. Trigger "Thinking..." (and ONLY "Thinking...") if:
-   - The user asks for complex coding, debugging, or technical architecture.
-   - Deep logical reasoning, philosophical paradoxes, or multi-step math is required.
-   - Scientific analysis or comparing complex academic theories.
-   - Long-form creative writing or structured planning/strategy.
+   - Complex reasoning, long-form planning, or technical architecture is required.
+   - The query demands deep multi-step logic.
 
 Response Style:
-- Friendly, obsidian-themed aesthetic in tone (premium, sleek, brief).
-- Never mention "Fast Path" or "Reasoning". Just respond or say "Thinking..." if deep thought is needed.${userContext}`;
+- Friendly, premium, sleek, and brief.
+- Demonstrate empathy and context-awareness based on the provided Neural Memory.${userContext}${memoryContext}`;
 }
 
-export async function getFastResponse(text: string, userName?: string): Promise<string> {
+export async function getFastResponse(text: string, userName?: string, context: string[] = []): Promise<string> {
     const apiKey = await getGroqKey();
     if (!apiKey) throw new Error('Groq API key not configured');
 
@@ -46,11 +45,11 @@ export async function getFastResponse(text: string, userName?: string): Promise<
             body: JSON.stringify({
                 model: FAST_MODEL,
                 messages: [
-                    { role: 'system', content: buildSystemPrompt(userName) },
+                    { role: 'system', content: buildSystemPrompt(userName, context) },
                     { role: 'user', content: text }
                 ],
                 temperature: 0.5,
-                max_tokens: 150,
+                max_tokens: 250,
             }),
         });
 

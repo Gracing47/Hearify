@@ -25,25 +25,9 @@ export default function TabLayout() {
           tabBarInactiveTintColor: '#666',
           tabBarShowLabel: true,
           tabBarLabelStyle: styles.tabLabel,
-          // Floating Glass Tab Bar
+          // Hidden - Using Burger Menu instead
           tabBarStyle: {
-            position: 'absolute',
-            bottom: insets.bottom + 16,
-            left: 20,
-            right: 20,
-            height: 70,
-            borderRadius: 35,
-            backgroundColor: 'rgba(20, 20, 20, 0.85)',
-            borderTopWidth: 0,
-            borderWidth: 1,
-            borderColor: 'rgba(255, 255, 255, 0.08)',
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 10 },
-            shadowOpacity: 0.5,
-            shadowRadius: 20,
-            elevation: 20,
-            paddingBottom: 0,
-            paddingTop: 10,
+            display: 'none',
           },
           tabBarBackground: () => (
             Platform.OS === 'ios' ? (

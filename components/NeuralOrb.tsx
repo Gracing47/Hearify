@@ -68,12 +68,20 @@ const neuralOrbShader = Skia.RuntimeEffect.Make(`
 export function NeuralOrb({ intensity, state, size = DEFAULT_ORB_SIZE }: NeuralOrbProps) {
     const time = useSharedValue(0);
 
+    const thinkingPulse = useSharedValue(0);
+
     useFrameCallback((frameInfo) => {
         time.value += 0.01;
+        if (state === 'thinking') {
+            thinkingPulse.value = Math.sin(frameInfo.timestamp / 300) * 0.15 + 0.15;
+        } else {
+            thinkingPulse.value = 0;
+        }
     });
 
     const springIntensity = useDerivedValue(() => {
-        return withSpring(intensity.value, { damping: 12, stiffness: 90 });
+        const base = intensity.value + thinkingPulse.value;
+        return withSpring(base, { damping: 12, stiffness: 90 });
     });
 
     const orbColor = useDerivedValue(() => {
@@ -86,18 +94,20 @@ export function NeuralOrb({ intensity, state, size = DEFAULT_ORB_SIZE }: NeuralO
         }
     });
 
+    const uniforms = useDerivedValue(() => ({
+        u_time: time.value,
+        u_intensity: springIntensity.value,
+        u_color: orbColor.value,
+        u_res: [size, size]
+    }));
+
     return (
         <Canvas style={{ width: size, height: size }}>
             <Fill color="transparent" />
             <Group>
                 <Shader
                     source={neuralOrbShader}
-                    uniforms={useDerivedValue(() => ({
-                        u_time: time.value,
-                        u_intensity: springIntensity.value,
-                        u_color: orbColor.value,
-                        u_res: [size, size]
-                    }))}
+                    uniforms={uniforms}
                 />
                 <Circle cx={size / 2} cy={size / 2} r={size / 2} />
             </Group>

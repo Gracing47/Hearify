@@ -9,6 +9,8 @@ export interface Snippet {
   id: number;
   content: string;
   type: 'fact' | 'feeling' | 'goal';
+  sentiment: 'analytical' | 'positive' | 'creative' | 'neutral';
+  topic: string;
   timestamp: number;
   embedding?: Float32Array;
   x: number;
@@ -25,6 +27,8 @@ export const SCHEMA = {
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       content TEXT NOT NULL,
       type TEXT NOT NULL CHECK(type IN ('fact', 'feeling', 'goal')),
+      sentiment TEXT DEFAULT 'neutral' CHECK(sentiment IN ('analytical', 'positive', 'creative', 'neutral')),
+      topic TEXT DEFAULT 'misc',
       timestamp INTEGER NOT NULL,
       x REAL DEFAULT 0,
       y REAL DEFAULT 0
@@ -34,7 +38,6 @@ export const SCHEMA = {
   `,
 
   // Native Vector Shadow Table (sqlite-vec)
-  // Note: Float32 vectors are 1536 dimensions for OpenAI text-embedding-3-small
   vectorTable: `
     CREATE VIRTUAL TABLE IF NOT EXISTS vec_snippets USING vec0(
       id INTEGER PRIMARY KEY,
@@ -42,9 +45,11 @@ export const SCHEMA = {
     );
   `,
 
-  // Migration for existing tables (if needed)
+  // Migrations for schema evolution
   migrations: [
     `ALTER TABLE snippets ADD COLUMN x REAL DEFAULT 0;`,
-    `ALTER TABLE snippets ADD COLUMN y REAL DEFAULT 0;`
+    `ALTER TABLE snippets ADD COLUMN y REAL DEFAULT 0;`,
+    `ALTER TABLE snippets ADD COLUMN sentiment TEXT DEFAULT 'neutral';`,
+    `ALTER TABLE snippets ADD COLUMN topic TEXT DEFAULT 'misc';`
   ]
 };
