@@ -1,98 +1,590 @@
-import { Image } from 'expo-image';
-import { Platform, StyleSheet } from 'react-native';
+/**
+ * Hearify Main Screen - Neural AI Companion Interface
+ */
 
-import { HelloWave } from '@/components/hello-wave';
-import ParallaxScrollView from '@/components/parallax-scroll-view';
-import { ThemedText } from '@/components/themed-text';
-import { ThemedView } from '@/components/themed-view';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import { Link } from 'expo-router';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Dimensions,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View
+} from 'react-native';
+import Animated, {
+  FadeInDown,
+  FadeInUp,
+  useAnimatedStyle,
+  useSharedValue,
+  withRepeat,
+  withSequence,
+  withSpring,
+  withTiming,
+} from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { NeuralOrb } from '../../components/NeuralOrb';
+import { areKeysConfigured } from '../../config/api';
+import { findSimilarSnippets, initDatabase, insertSnippet } from '../../db';
+import { useTTS } from '../../hooks/useTTS';
+import { useVoiceCapture } from '../../hooks/useVoiceCapture';
+import { processWithReasoning } from '../../services/deepseek';
+import { getFastResponse } from '../../services/fastchat';
+import { transcribeAudio } from '../../services/groq';
+import { generateEmbedding, generateEmbeddings } from '../../services/openai';
+import { useConversationStore } from '../../store/conversation';
+import * as Haptics from '../../utils/haptics';
+
+const { width } = Dimensions.get('window');
+
+type AppState = 'idle' | 'listening' | 'processing' | 'speaking';
 
 export default function HomeScreen() {
-  return (
-    <ParallaxScrollView
-      headerBackgroundColor={{ light: '#A1CEDC', dark: '#1D3D47' }}
-      headerImage={
-        <Image
-          source={require('@/assets/images/partial-react-logo.png')}
-          style={styles.reactLogo}
-        />
-      }>
-      <ThemedView style={styles.titleContainer}>
-        <ThemedText type="title">Welcome!</ThemedText>
-        <HelloWave />
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 1: Try it</ThemedText>
-        <ThemedText>
-          Edit <ThemedText type="defaultSemiBold">app/(tabs)/index.tsx</ThemedText> to see changes.
-          Press{' '}
-          <ThemedText type="defaultSemiBold">
-            {Platform.select({
-              ios: 'cmd + d',
-              android: 'cmd + m',
-              web: 'F12',
-            })}
-          </ThemedText>{' '}
-          to open developer tools.
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <Link href="/modal">
-          <Link.Trigger>
-            <ThemedText type="subtitle">Step 2: Explore</ThemedText>
-          </Link.Trigger>
-          <Link.Preview />
-          <Link.Menu>
-            <Link.MenuAction title="Action" icon="cube" onPress={() => alert('Action pressed')} />
-            <Link.MenuAction
-              title="Share"
-              icon="square.and.arrow.up"
-              onPress={() => alert('Share pressed')}
-            />
-            <Link.Menu title="More" icon="ellipsis">
-              <Link.MenuAction
-                title="Delete"
-                icon="trash"
-                destructive
-                onPress={() => alert('Delete pressed')}
-              />
-            </Link.Menu>
-          </Link.Menu>
-        </Link>
+  const [appState, setAppState] = useState<AppState>('idle');
+  const [isKeysConfigured, setIsKeysConfigured] = useState(false);
 
-        <ThemedText>
-          {`Tap the Explore tab to learn more about what's included in this starter app.`}
-        </ThemedText>
-      </ThemedView>
-      <ThemedView style={styles.stepContainer}>
-        <ThemedText type="subtitle">Step 3: Get a fresh start</ThemedText>
-        <ThemedText>
-          {`When you're ready, run `}
-          <ThemedText type="defaultSemiBold">npm run reset-project</ThemedText> to get a fresh{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> directory. This will move the current{' '}
-          <ThemedText type="defaultSemiBold">app</ThemedText> to{' '}
-          <ThemedText type="defaultSemiBold">app-example</ThemedText>.
-        </ThemedText>
-      </ThemedView>
-    </ParallaxScrollView>
+  const voiceCapture = useVoiceCapture();
+  const tts = useTTS();
+  const {
+    messages,
+    addUserMessage,
+    addAIResponse,
+    setTranscribing,
+    setReasoning,
+    setEmbedding,
+    setSpeaking,
+    setError,
+    isTranscribing,
+    isReasoning,
+    isEmbedding,
+    isSpeaking,
+  } = useConversationStore();
+
+  const recordButtonScale = useSharedValue(1);
+
+  useEffect(() => {
+    if (appState === 'listening') {
+      recordButtonScale.value = withRepeat(
+        withSequence(
+          withTiming(1.15, { duration: 1000 }),
+          withTiming(1, { duration: 1000 })
+        ),
+        -1,
+        true
+      );
+    } else {
+      recordButtonScale.value = withSpring(1);
+    }
+  }, [appState]);
+
+  const animatedButtonStyle = useAnimatedStyle(() => ({
+    transform: [{ scale: recordButtonScale.value }],
+  }));
+
+  // Initialize database and check API keys
+  useEffect(() => {
+    const init = async () => {
+      try {
+        await initDatabase();
+        console.log('[App] Database initialized');
+      } catch (error) {
+        console.error('[App] Database init failed:', error);
+      }
+
+      const configured = await areKeysConfigured();
+      setIsKeysConfigured(configured);
+    };
+    init();
+  }, []);
+
+  // Connect TTS on mount
+  useEffect(() => {
+    if (isKeysConfigured) {
+      tts.connect().catch((error) => {
+        console.error('[App] TTS connection failed:', error);
+      });
+    }
+  }, [isKeysConfigured]);
+
+  const handleRecordPress = useCallback(async () => {
+    if (!isKeysConfigured) {
+      Alert.alert('Setup Required', 'Please configure your API keys in settings');
+      return;
+    }
+
+    if (appState === 'idle') {
+      // Start recording
+      try {
+        Haptics.listening();
+        await voiceCapture.startRecording();
+        setAppState('listening');
+      } catch (error) {
+        console.error('[App] Recording failed:', error);
+        Alert.alert('Error', 'Failed to start recording');
+      }
+    } else if (appState === 'listening') {
+      // Stop recording and process
+      try {
+        const audioUri = await voiceCapture.stopRecording();
+        setAppState('processing');
+        processAudio(audioUri);
+      } catch (error) {
+        console.error('[App] Processing failed:', error);
+        setAppState('idle');
+        Alert.alert('Error', 'Failed to process audio');
+      }
+    }
+  }, [appState, voiceCapture, isKeysConfigured]);
+
+  const processAudio = useCallback(async (audioUri: string) => {
+    try {
+      Haptics.thinking();
+
+      // 1. Transcribe audio
+      console.log('[Neural Loop] Step 1: Transcribing...');
+      setTranscribing(true);
+      const { text: transcript } = await transcribeAudio(audioUri);
+      setTranscribing(false);
+      addUserMessage(transcript);
+
+      // 2. Get context from vector search
+      console.log('[Neural Loop] Step 2: Searching context...');
+      const queryEmbed = await generateEmbedding(transcript);
+      const similarSnippets = await findSimilarSnippets(queryEmbed, 3);
+      const context = similarSnippets.map(s => s.content);
+
+      // 3. Fast Path determination
+      console.log('[Neural Loop] Step 3: Assessing complexity...');
+      let finalResponse = '';
+      let snippets: any[] = [];
+
+      // Catch greetings and short queries for instant response
+      const isShortQuery = transcript.split(' ').length < 10;
+
+      if (isShortQuery) {
+        console.log('[Neural Loop] Executing Fast Path (Groq)...');
+        const fastResponse = await getFastResponse(transcript);
+
+        if (fastResponse.toLowerCase().includes('thinking')) {
+          console.log('[Neural Loop] Fast Path suggested reasoning. Switching...');
+          setReasoning(true);
+          const result = await processWithReasoning(transcript, context);
+          finalResponse = result.response;
+          snippets = result.snippets;
+          setReasoning(false);
+        } else {
+          finalResponse = fastResponse;
+        }
+      } else {
+        // Deep Reasoning Path
+        console.log('[Neural Loop] Executing Reasoning Path (DeepSeek)...');
+        setReasoning(true);
+        const result = await processWithReasoning(transcript, context);
+        finalResponse = result.response;
+        snippets = result.snippets;
+        setReasoning(false);
+      }
+
+      // 4. Generate embeddings for new snippets
+      console.log('[Neural Loop] Step 4: Embedding snippets...');
+      setEmbedding(true);
+      if (snippets.length > 0) {
+        const contents = snippets.map(s => s.content);
+        const embeddings = await generateEmbeddings(contents);
+
+        // 5. Store in local database
+        for (let i = 0; i < snippets.length; i++) {
+          const snippet = snippets[i];
+          await insertSnippet(snippet.content, snippet.type, embeddings[i]);
+        }
+      }
+      setEmbedding(false);
+
+      // 6. Speak response
+      console.log('[Neural Loop] Step 5: Speaking...');
+      Haptics.speaking();
+      addAIResponse(finalResponse);
+      setAppState('speaking');
+      setSpeaking(true);
+      try {
+        await tts.speak(finalResponse);
+      } catch (ttsError) {
+        console.error('[Neural Loop] TTS failed but continuing:', ttsError);
+      }
+
+      // Done
+      setSpeaking(false);
+      setAppState('idle');
+
+    } catch (error) {
+      console.error('[Neural Loop] Failed:', error);
+      setError(error instanceof Error ? error.message : 'Unknown error');
+      setTranscribing(false);
+      setReasoning(false);
+      setEmbedding(false);
+      setSpeaking(false);
+      setAppState('idle');
+      Haptics.error();
+      Alert.alert('Error', 'Neural loop failed. Check console for details.');
+    }
+  }, []);
+
+  const getOrbState = (): 'idle' | 'listening' | 'thinking' | 'speaking' => {
+    if (appState === 'listening') return 'listening';
+    if (appState === 'processing') return 'thinking';
+    if (appState === 'speaking') return 'speaking';
+    return 'idle';
+  };
+
+  const getStatusText = () => {
+    if (appState === 'listening') return 'Listening...';
+    if (isTranscribing) return 'Transcribing Audio...';
+    if (isReasoning) return 'Neural Reasoning...';
+    if (isEmbedding) return 'Updating Memory...';
+    if (isSpeaking) return 'Speaking...';
+    return isKeysConfigured ? 'Neural System Online' : 'Setup Required';
+  };
+
+  const getButtonText = () => {
+    if (appState === 'listening') return 'Stop';
+    if (appState === 'processing') return 'Processing';
+    if (appState === 'speaking') return 'Speaking';
+    return 'Record';
+  };
+
+  const scrollViewRef = useRef<ScrollView>(null);
+
+  // Auto-scroll to bottom on new messages
+  useEffect(() => {
+    setTimeout(() => {
+      scrollViewRef.current?.scrollToEnd({ animated: true });
+    }, 100);
+  }, [messages]);
+
+  const insets = useSafeAreaInsets();
+
+  return (
+    <View style={styles.container}>
+      <LinearGradient
+        colors={['#0a0a0f', '#1a1a2e', '#09090b']}
+        style={StyleSheet.absoluteFill}
+      />
+
+      <View style={[styles.safeArea, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
+        {/* Header */}
+        <View style={styles.header}>
+          <View>
+            <Text style={styles.logo}>Hearify</Text>
+            <View style={styles.onlineBadge}>
+              <View style={styles.onlineDot} />
+              <Text style={styles.onlineText}>R1 REASONING ACTIVE</Text>
+            </View>
+          </View>
+          <Link href="/explore" asChild>
+            <TouchableOpacity style={styles.settingsButton}>
+              <BlurView intensity={20} style={styles.settingsBlur}>
+                <Text style={styles.settingsText}>Settings</Text>
+              </BlurView>
+            </TouchableOpacity>
+          </Link>
+        </View>
+
+        {/* Conversation history */}
+        <ScrollView
+          ref={scrollViewRef}
+          style={styles.conversation}
+          contentContainerStyle={styles.conversationContent}
+          showsVerticalScrollIndicator={false}
+        >
+          {messages.length === 0 ? (
+            <Animated.View
+              entering={FadeInUp.delay(300)}
+              style={styles.emptyState}
+            >
+              <Text style={styles.emptyText}>Neural Companion</Text>
+              <Text style={styles.emptyHint}>I process, remember, and reason for you.</Text>
+            </Animated.View>
+          ) : (
+            messages.map((msg, index) => (
+              <Animated.View
+                key={msg.id}
+                entering={FadeInDown.springify().damping(15)}
+                style={[
+                  styles.messageWrapper,
+                  msg.role === 'user' ? styles.userMessageWrapper : styles.aiMessageWrapper,
+                ]}
+              >
+                <BlurView
+                  intensity={msg.role === 'user' ? 40 : 25}
+                  tint="dark"
+                  style={[
+                    styles.messageBlur,
+                    msg.role === 'user' ? styles.userMessageBlur : styles.aiMessageBlur,
+                  ]}
+                >
+                  {msg.role === 'assistant' && (
+                    <Text style={styles.assistantLabel}>HEARIFY AI</Text>
+                  )}
+                  <Text style={styles.messageText}>{msg.content}</Text>
+                </BlurView>
+              </Animated.View>
+            ))
+          )}
+          {isReasoning && (
+            <Animated.View
+              entering={FadeInDown}
+              style={[styles.messageWrapper, styles.aiMessageWrapper]}
+            >
+              <BlurView intensity={15} tint="dark" style={[styles.messageBlur, styles.aiMessageBlur, styles.thinkingBlur]}>
+                <ActivityIndicator size="small" color="#6366f1" style={{ marginRight: 10 }} />
+                <Text style={styles.thinkingText}>Thinking...</Text>
+              </BlurView>
+            </Animated.View>
+          )}
+        </ScrollView>
+
+        {/* Status Area */}
+        <View style={styles.statusArea}>
+          <View style={styles.orbWrapper}>
+            <NeuralOrb
+              intensity={tts.intensity}
+              state={getOrbState()}
+            />
+            {appState === 'processing' && (
+              <View style={styles.processingDetails}>
+                <ActivityIndicator color="#6366f1" size="small" />
+              </View>
+            )}
+          </View>
+          <Text style={styles.statusLabel}>{getStatusText()}</Text>
+        </View>
+
+        {/* Footer Area */}
+        <View style={styles.footer}>
+          <TouchableOpacity
+            activeOpacity={0.8}
+            onPress={handleRecordPress}
+            disabled={appState === 'processing' || appState === 'speaking'}
+          >
+            <Animated.View
+              style={[
+                styles.recordButton,
+                appState === 'listening' && styles.recordButtonActive,
+                (appState === 'processing' || appState === 'speaking') && styles.recordButtonDisabled,
+                animatedButtonStyle,
+              ]}
+            >
+              {appState === 'listening' ? (
+                <View style={styles.stopIcon} />
+              ) : appState === 'processing' || appState === 'speaking' ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <View style={styles.micIcon} />
+              )}
+            </Animated.View>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
+  container: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  safeArea: {
+    flex: 1,
+  },
+  header: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+    paddingTop: 12,
+    paddingBottom: 20,
+  },
+  logo: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#fff',
+    letterSpacing: -0.5,
+  },
+  onlineBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    marginTop: 4,
   },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
+  onlineDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#10b981',
+    marginRight: 6,
   },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
+  onlineText: {
+    color: '#10b981',
+    fontSize: 10,
+    fontWeight: '700',
+    letterSpacing: 1,
+  },
+  settingsButton: {
+    borderRadius: 20,
+    overflow: 'hidden',
+  },
+  settingsBlur: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  settingsText: {
+    color: '#ddd',
+    fontSize: 14,
+    fontWeight: '600',
+  },
+  conversation: {
+    flex: 1,
+  },
+  conversationContent: {
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+  },
+  emptyState: {
+    paddingTop: 100,
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 32,
+    fontWeight: '800',
+    color: '#fff',
+    opacity: 0.9,
+    marginBottom: 12,
+    letterSpacing: -1,
+  },
+  emptyHint: {
+    fontSize: 14,
+    color: '#666',
+    textAlign: 'center',
+  },
+  messageWrapper: {
+    marginBottom: 16,
+    maxWidth: '85%',
+  },
+  userMessageWrapper: {
+    alignSelf: 'flex-end',
+  },
+  aiMessageWrapper: {
+    alignSelf: 'flex-start',
+  },
+  messageBlur: {
+    padding: 16,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.1)',
+  },
+  userMessageBlur: {
+    backgroundColor: 'rgba(99, 102, 241, 0.15)',
+    borderBottomRightRadius: 4,
+  },
+  aiMessageBlur: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderBottomLeftRadius: 4,
+  },
+  assistantLabel: {
+    color: '#6366f1',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 1.5,
+    marginBottom: 6,
+    textTransform: 'uppercase',
+  },
+  thinkingBlur: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+  },
+  thinkingText: {
+    color: '#666',
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  messageText: {
+    color: '#fff',
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: '400',
+  },
+  statusArea: {
+    alignItems: 'center',
+    paddingVertical: 30,
+  },
+  orbWrapper: {
+    position: 'relative',
+    height: 160,
+    width: 160,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  processingDetails: {
     position: 'absolute',
+    top: -10,
+    right: -10,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    padding: 8,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(99, 102, 241, 0.3)',
+  },
+  statusLabel: {
+    color: '#666',
+    fontSize: 12,
+    fontWeight: '600',
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+    marginTop: 10,
+  },
+  footer: {
+    paddingBottom: 30,
+    alignItems: 'center',
+  },
+  recordButton: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    backgroundColor: '#6366f1',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#6366f1',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.5,
+    shadowRadius: 12,
+    elevation: 10,
+  },
+  recordButtonActive: {
+    backgroundColor: '#ef4444',
+    shadowColor: '#ef4444',
+    transform: [{ scale: 1.1 }],
+  },
+  recordButtonDisabled: {
+    backgroundColor: '#222',
+    opacity: 0.5,
+    shadowOpacity: 0,
+  },
+  micIcon: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#fff',
+  },
+  stopIcon: {
+    width: 20,
+    height: 20,
+    borderRadius: 4,
+    backgroundColor: '#fff',
   },
 });
