@@ -1,16 +1,16 @@
 /**
- * ElevenLabs Flash v2.5 WebSocket streaming client
+ * ElevenLabs TTS Service
  * 
- * Dev notes:
- * - Target latency: <100ms for first audio chunk
- * - WebSocket protocol: send BOS → text chunks → EOS
- * - Returns audio chunks as base64-encoded PCM
+ * Uses REST API for full audio generation (not WebSocket streaming)
+ * This produces smooth, complete audio without chunk stuttering
  */
 
+import * as FileSystem from 'expo-file-system/legacy';
 import { getElevenLabsKey } from '../config/api';
 
-const VOICE_ID = 'EXAVITQu4vr4xnSDxMaL'; // Sarah voice (default, can be customized)
+const VOICE_ID = 'EXAVITQu4vr4xnSDxMaL'; // Sarah voice
 const MODEL_ID = 'eleven_flash_v2_5';
+const API_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
 
 export interface TTSOptions {
     voiceId?: string;
@@ -19,190 +19,103 @@ export interface TTSOptions {
 }
 
 /**
- * ElevenLabs WebSocket client for streaming TTS
+ * Generate complete audio file from text using ElevenLabs REST API
+ * Returns the local file URI for playback
  */
-export class ElevenLabsClient {
-    private ws: WebSocket | null = null;
-    private onAudioChunk: ((chunk: string) => void) | null = null;
-    private onComplete: (() => void) | null = null;
-    private onError: ((error: Error) => void) | null = null;
-    private onDisconnect: (() => void) | null = null;
+export async function generateSpeech(text: string, options: TTSOptions = {}): Promise<string> {
+    const apiKey = await getElevenLabsKey();
+    if (!apiKey) {
+        throw new Error('ElevenLabs API key not configured');
+    }
 
-    /**
-     * Connect to ElevenLabs WebSocket
-     */
-    async connect(options: TTSOptions = {}): Promise<void> {
-        // If already connected and open, just return
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-            console.log('[ElevenLabs] Already connected, reusing connection');
-            return;
+    const voiceId = options.voiceId || VOICE_ID;
+    const url = `${API_URL}/${voiceId}`;
+
+    console.log(`[ElevenLabs] Generating speech for ${text.length} chars...`);
+
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Accept': 'audio/mpeg',
+            'Content-Type': 'application/json',
+            'xi-api-key': apiKey,
+        },
+        body: JSON.stringify({
+            text,
+            model_id: MODEL_ID,
+            voice_settings: {
+                stability: options.stability ?? 0.5,
+                similarity_boost: options.similarityBoost ?? 0.75,
+            },
+        }),
+    });
+
+    if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`ElevenLabs API error: ${response.status} - ${error}`);
+    }
+
+    // Get audio as base64
+    const audioBlob = await response.blob();
+    const base64 = await blobToBase64(audioBlob);
+
+    // Save to cache directory
+    const cacheDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
+    if (!cacheDir) {
+        // Fallback: return data URI directly
+        return `data:audio/mpeg;base64,${base64}`;
+    }
+
+    const fileName = `tts_${Date.now()}.mp3`;
+    const fileUri = `${cacheDir}${fileName}`;
+
+    await FileSystem.writeAsStringAsync(fileUri, base64, {
+        encoding: FileSystem.EncodingType.Base64,
+    });
+
+    console.log(`[ElevenLabs] Audio saved to: ${fileUri}`);
+    return fileUri;
+}
+
+/**
+ * Convert Blob to base64 string
+ */
+function blobToBase64(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            const result = reader.result as string;
+            // Remove data URL prefix (data:audio/mpeg;base64,)
+            const base64 = result.split(',')[1];
+            resolve(base64);
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+    });
+}
+
+/**
+ * Cleanup old TTS audio files from cache
+ */
+export async function cleanupTTSCache(): Promise<void> {
+    const cacheDir = FileSystem.cacheDirectory;
+    if (!cacheDir) return;
+
+    try {
+        const files = await FileSystem.readDirectoryAsync(cacheDir);
+        const ttsFiles = files.filter(f => f.startsWith('tts_') && f.endsWith('.mp3'));
+
+        // Keep only last 5 files
+        if (ttsFiles.length > 5) {
+            const toDelete = ttsFiles.slice(0, -5);
+            await Promise.all(
+                toDelete.map(f =>
+                    FileSystem.deleteAsync(`${cacheDir}${f}`, { idempotent: true })
+                )
+            );
+            console.log(`[ElevenLabs] Cleaned up ${toDelete.length} old files`);
         }
-
-        const apiKey = await getElevenLabsKey();
-        if (!apiKey) {
-            throw new Error('ElevenLabs API key not configured');
-        }
-
-        const voiceId = options.voiceId || VOICE_ID;
-        // flush=true disables server-side buffering for lower latency
-        // optimize_streaming_latency=4 is maximum optimization (best for real-time)
-        const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${voiceId}/stream-input?model_id=${MODEL_ID}&optimize_streaming_latency=4&flush=true&xi-api-key=${apiKey}`;
-
-        return new Promise((resolve, reject) => {
-            // Set connection timeout to prevent hanging
-            const connectionTimeout = setTimeout(() => {
-                if (this.ws && this.ws.readyState !== WebSocket.OPEN) {
-                    console.error('[ElevenLabs] Connection timeout after 30s');
-                    this.ws?.close();
-                    reject(new Error('Connection timeout'));
-                }
-            }, 30000);
-
-            this.ws = new WebSocket(wsUrl);
-
-            this.ws.onopen = () => {
-                clearTimeout(connectionTimeout);
-                console.log('[ElevenLabs] WebSocket connected');
-
-                try {
-                    // Send BOS (Beginning of Stream) message
-                    const bosMessage = JSON.stringify({
-                        text: ' ',
-                        voice_settings: {
-                            stability: options.stability || 0.5,
-                            similarity_boost: options.similarityBoost || 0.75,
-                        },
-                        xi_api_key: apiKey,
-                    });
-
-                    this.ws?.send(bosMessage);
-                    console.log('[ElevenLabs] BOS message sent');
-                    resolve();
-                } catch (error) {
-                    console.error('[ElevenLabs] Failed to send BOS message:', error);
-                    reject(error);
-                }
-            };
-
-            this.ws.onmessage = (event) => {
-                try {
-                    const message = JSON.parse(event.data);
-
-                    if (message.audio) {
-                        // Received audio chunk (base64 encoded)
-                        this.onAudioChunk?.(message.audio);
-                    }
-
-                    if (message.isFinal) {
-                        console.log('[ElevenLabs] Stream completed');
-                        this.onComplete?.();
-                    }
-
-                    if (message.message) {
-                        // ElevenLabs sends error details in the 'message' field
-                        console.error('[ElevenLabs] Server Message:', message.message);
-                        if (message.error) {
-                            this.onError?.(new Error(message.message));
-                        }
-                    }
-                } catch (e) {
-                    console.error('[ElevenLabs] Failed to parse message:', event.data);
-                }
-            };
-
-            this.ws.onerror = (error) => {
-                clearTimeout(connectionTimeout);
-                console.error('[ElevenLabs] WebSocket error event:', error);
-                this.onError?.(new Error('WebSocket connection failed'));
-                reject(error);
-            };
-
-            this.ws.onclose = () => {
-                clearTimeout(connectionTimeout);
-                console.log('[ElevenLabs] WebSocket closed');
-                this.onDisconnect?.();
-            };
-        });
-    }
-
-    /**
-     * Stream text for TTS
-     * Splits text into sentences for smoother streaming
-     */
-    sendText(text: string): void {
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-            const state = this.ws ? this.ws.readyState : 'null';
-            throw new Error(`WebSocket not connected (state: ${state})`);
-        }
-
-        // Split text into sentences for better streaming
-        // ElevenLabs processes better with sentence-level chunks
-        const sentences = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g) || [text];
-
-        console.log(`[ElevenLabs] Sending ${sentences.length} sentences (${text.length} total chars)`);
-
-        for (const sentence of sentences) {
-            const trimmed = sentence.trim();
-            if (trimmed) {
-                const payload = {
-                    text: trimmed + ' ', // Add space to help with word boundaries
-                    try_trigger_generation: true,
-                };
-                this.ws.send(JSON.stringify(payload));
-            }
-        }
-    }
-
-    /**
-     * Send EOS (End of Stream) to finalize
-     */
-    endStream(): void {
-        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-            console.warn('[ElevenLabs] Cannot send EOS - WebSocket not connected');
-            return;
-        }
-
-        console.log('[ElevenLabs] Sending EOS (end of stream)');
-        this.ws.send(JSON.stringify({
-            text: '',
-        }));
-    }
-
-    /**
-     * Close WebSocket connection
-     */
-    close(): void {
-        if (this.ws) {
-            this.ws.close();
-            this.ws = null;
-        }
-    }
-
-    /**
-     * Set callback for audio chunks
-     */
-    onAudio(callback: (chunk: string) => void): void {
-        this.onAudioChunk = callback;
-    }
-
-    /**
-     * Set callback for completion
-     */
-    onStreamComplete(callback: () => void): void {
-        this.onComplete = callback;
-    }
-
-    /**
-     * Set callback for errors
-     */
-    onStreamError(callback: (error: Error) => void): void {
-        this.onError = callback;
-    }
-
-    /**
-     * Set callback for disconnection
-     */
-    onDisconnectCallback(callback: () => void): void {
-        this.onDisconnect = callback;
+    } catch (e) {
+        console.warn('[ElevenLabs] Cache cleanup failed:', e);
     }
 }

@@ -22,6 +22,7 @@ export interface ConversationState {
     isEmbedding: boolean;
     isSpeaking: boolean;
     error: string | null;
+    pendingSnippets: { type: 'fact' | 'feeling' | 'goal', content: string, id: string }[];
 }
 
 export interface ConversationActions {
@@ -32,6 +33,8 @@ export interface ConversationActions {
     setEmbedding: (value: boolean) => void;
     setSpeaking: (value: boolean) => void;
     setError: (error: string | null) => void;
+    addPendingSnippet: (snippet: { type: 'fact' | 'feeling' | 'goal', content: string }) => void;
+    removePendingSnippet: (id: string) => void;
     clearMessages: () => void;
 }
 
@@ -43,6 +46,7 @@ export const useConversationStore = create<ConversationState & ConversationActio
     isEmbedding: false,
     isSpeaking: false,
     error: null,
+    pendingSnippets: [],
 
     // Actions
     addUserMessage: (content: string) => set((state) => ({
@@ -74,5 +78,11 @@ export const useConversationStore = create<ConversationState & ConversationActio
     setEmbedding: (value: boolean) => set({ isEmbedding: value }),
     setSpeaking: (value: boolean) => set({ isSpeaking: value }),
     setError: (error: string | null) => set({ error }),
+    addPendingSnippet: (snippet) => set((state) => ({
+        pendingSnippets: [...state.pendingSnippets, { ...snippet, id: Math.random().toString(36).substr(2, 9) }]
+    })),
+    removePendingSnippet: (id) => set((state) => ({
+        pendingSnippets: state.pendingSnippets.filter(s => s.id !== id)
+    })),
     clearMessages: () => set({ messages: [] }),
 }));

@@ -27,6 +27,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { NeuralConfirmation } from '../../components/NeuralConfirmation';
 import { NeuralOrb } from '../../components/NeuralOrb';
 import { areKeysConfigured } from '../../config/api';
 import { findSimilarSnippets, initDatabase, insertSnippet } from '../../db';
@@ -62,6 +63,9 @@ export default function HomeScreen() {
     isReasoning,
     isEmbedding,
     isSpeaking,
+    pendingSnippets,
+    addPendingSnippet,
+    removePendingSnippet,
   } = useConversationStore();
 
   const recordButtonScale = useSharedValue(1);
@@ -101,14 +105,7 @@ export default function HomeScreen() {
     init();
   }, []);
 
-  // Connect TTS on mount
-  useEffect(() => {
-    if (isKeysConfigured) {
-      tts.connect().catch((error) => {
-        console.error('[App] TTS connection failed:', error);
-      });
-    }
-  }, [isKeysConfigured]);
+  // TTS is now REST-based, no connection needed
 
   const handleRecordPress = useCallback(async () => {
     if (!isKeysConfigured) {
@@ -162,10 +159,10 @@ export default function HomeScreen() {
       let finalResponse = '';
       let snippets: any[] = [];
 
-      // Catch greetings and short queries for instant response
-      const isShortQuery = transcript.split(' ').length < 10;
+      // Catch greetings and everyday chat for instant response (max 40 words)
+      const isChattyQuery = transcript.split(' ').length < 40;
 
-      if (isShortQuery) {
+      if (isChattyQuery) {
         console.log('[Neural Loop] Executing Fast Path (Groq)...');
         const fastResponse = await getFastResponse(transcript);
 
@@ -196,10 +193,13 @@ export default function HomeScreen() {
         const contents = snippets.map(s => s.content);
         const embeddings = await generateEmbeddings(contents);
 
-        // 5. Store in local database
+        // 5. Store in local database & Trigger Confirmation UI
         for (let i = 0; i < snippets.length; i++) {
           const snippet = snippets[i];
           await insertSnippet(snippet.content, snippet.type, embeddings[i]);
+
+          // Trigger the 'Neural Confirmation'
+          addPendingSnippet({ type: snippet.type, content: snippet.content });
         }
       }
       setEmbedding(false);
@@ -273,6 +273,16 @@ export default function HomeScreen() {
         colors={['#0a0a0f', '#1a1a2e', '#09090b']}
         style={StyleSheet.absoluteFill}
       />
+
+      {/* Neural Confirmation Overlays */}
+      {pendingSnippets.map((snippet) => (
+        <NeuralConfirmation
+          key={snippet.id}
+          type={snippet.type}
+          content={snippet.content}
+          onComplete={() => removePendingSnippet(snippet.id)}
+        />
+      ))}
 
       <View style={[styles.safeArea, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
         {/* Header */}
