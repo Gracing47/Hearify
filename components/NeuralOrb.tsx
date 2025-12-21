@@ -1,126 +1,105 @@
 /**
- * Neural Orb visualization component using React Native Skia
- * 
- * Dev notes:
- * - GPU-accelerated with custom GLSL shader
- * - Reanimated SharedValue for audio-reactive pulsation
- * - Color transitions based on AI state
+ * Neural Orb - The Soul of Hearify
+ * High-fidelity SKSL Shader with refraction and organic distortion.
  */
 
-import { Canvas, Circle, Group, Paint, Shader, Skia } from '@shopify/react-native-skia';
-import React, { useMemo } from 'react';
-import { Dimensions } from 'react-native';
-import { SharedValue, useDerivedValue, useSharedValue, withSpring } from 'react-native-reanimated';
+import { Canvas, Circle, Fill, Group, Shader, Skia } from '@shopify/react-native-skia';
+import React from 'react';
+import { SharedValue, useDerivedValue, useFrameCallback, useSharedValue, withSpring } from 'react-native-reanimated';
 
-const { width, height } = Dimensions.get('window');
-const ORB_SIZE = 160; // Standardized size
+const DEFAULT_ORB_SIZE = 280; // Default size when not specified
 
 interface NeuralOrbProps {
-    intensity: SharedValue<number>; // SharedValue from Reanimated
+    intensity: SharedValue<number>;
     state: 'idle' | 'listening' | 'thinking' | 'speaking';
+    size?: number; // Optional custom size
 }
 
-/**
- * Advanced Neural Plasma Shader
- */
-const orbShader = Skia.RuntimeEffect.Make(`
-  uniform vec2 resolution;
-  uniform float time;
-  uniform float intensity;
-  uniform vec3 color;
-  
-  float hash(vec2 p) {
-    p = fract(p * vec2(123.34, 456.21));
-    p += dot(p, p + 45.32);
-    return fract(p.x * p.y);
+const neuralOrbShader = Skia.RuntimeEffect.Make(`
+  uniform float u_time;
+  uniform float u_intensity;
+  uniform vec3 u_color;
+  uniform vec2 u_res;
+
+  float sdCircle(vec2 p, float r) {
+    return length(p) - r;
   }
 
-  float noise(vec2 p) {
-    vec2 i = floor(p);
-    vec2 f = fract(p);
-    float a = hash(i);
-    float b = hash(i + vec2(1.0, 0.0));
-    float c = hash(i + vec2(0.0, 1.0));
-    float d = hash(i + vec2(1.0, 1.0));
-    vec2 u = f * f * (3.0 - 2.0 * f);
-    return mix(a, b, u.x) + (c - a) * u.y * (1.0 - u.x) + (d - b) * u.x * u.y;
+  mat2 rot(float a) {
+    float s = sin(a), c = cos(a);
+    return mat2(c, -s, s, c);
   }
 
-  half4 main(vec2 fragCoord) {
-    // Normalize coordinates to [0, 1] then center to [-0.5, 0.5]
-    vec2 uv = fragCoord / resolution - 0.5;
-    float d = length(uv) * 2.0; // range 0 to 1 at edges
+  half4 main(vec2 pos) {
+    vec2 uv = (pos - u_res * 0.5) / u_res.y;
+    float d = length(uv);
     
-    // Complex plasma movement
-    float n1 = noise(uv * 4.0 + time * 0.6 + intensity);
-    float n2 = noise(uv * 8.0 - time * 0.8 + n1);
+    // 1. Organic Warp Logic
+    vec2 warp = uv;
+    warp *= rot(u_time * 0.2 + d * 2.0);
+    float noise = sin(warp.x * 10.0 + u_time) * cos(warp.y * 10.0 - u_time);
+    uv += noise * 0.05 * u_intensity;
+
+    // 2. Neural Glass Body
+    float circle = sdCircle(uv, 0.35 + u_intensity * 0.05);
+    float edge = 1.0 - smoothstep(0.0, 0.02, abs(circle));
     
-    // Core and outer layers - adjusted for normalized d
-    float shape = 0.6 + 0.1 * n2 + (0.15 * intensity);
-    float glow = smoothstep(shape, shape - 0.4, d);
+    // 3. Chromatic Aberration & Refraction
+    float r = smoothstep(0.35 + u_intensity * 0.06, 0.0, length(uv + vec2(0.005, 0.0)));
+    float g = smoothstep(0.35 + u_intensity * 0.05, 0.0, length(uv));
+    float b = smoothstep(0.35 + u_intensity * 0.04, 0.0, length(uv - vec2(0.005, 0.0)));
     
-    // Dynamic color variations
-    vec3 baseColor = color * (0.8 + 0.3 * n1);
-    // Subtle inner highlights
-    vec3 highlights = vec3(1.0) * pow(glow, 8.0) * 0.3;
+    vec3 color = vec3(r, g, b) * u_color;
     
-    float alpha = glow * (0.85 + 0.15 * intensity);
+    // 4. Inner Glow & Plasma
+    float plasma = sin(d * 20.0 - u_time * 3.0) * 0.5 + 0.5;
+    color += plasma * u_color * 0.2 * (1.0 - d);
     
-    return half4(baseColor + highlights, alpha);
+    // 5. Specular Highlight (The Glass Look)
+    float spec = pow(1.0 - length(uv - vec2(-0.1, -0.1)), 12.0);
+    color += spec * 0.4;
+
+    float alpha = smoothstep(0.01, -0.01, circle);
+    
+    return half4(color * alpha, alpha * 0.9);
   }
 `)!;
 
-export function NeuralOrb({ intensity, state }: NeuralOrbProps) {
+export function NeuralOrb({ intensity, state, size = DEFAULT_ORB_SIZE }: NeuralOrbProps) {
     const time = useSharedValue(0);
 
-    // Animate time for shader
-    React.useEffect(() => {
-        const interval = setInterval(() => {
-            time.value += 0.016; // ~60fps
-        }, 16);
-
-        return () => clearInterval(interval);
-    }, [time]);
-
-    // Animate intensity changes using another shared value for spring smoothing
-    const animatedIntensity = useDerivedValue(() => {
-        return withSpring(intensity.value, {
-            damping: 10,
-            stiffness: 100,
-        });
+    useFrameCallback((frameInfo) => {
+        time.value += 0.01;
     });
 
-    // Color based on state
-    const color = useMemo(() => {
-        switch (state) {
-            case 'idle':
-                return [0.2, 0.4, 0.9]; // Blue
-            case 'listening':
-                return [0.6, 0.2, 0.9]; // Purple
-            case 'thinking':
-                return [0.9, 0.4, 0.7]; // Pink
-            case 'speaking':
-                return [0.9, 0.5, 0.2]; // Orange
-            default:
-                return [0.2, 0.4, 0.9];
-        }
-    }, [state]);
+    const springIntensity = useDerivedValue(() => {
+        return withSpring(intensity.value, { damping: 12, stiffness: 90 });
+    });
 
-    // Derived uniforms for shader
-    const uniforms = useDerivedValue(() => ({
-        resolution: [ORB_SIZE, ORB_SIZE],
-        time: time.value,
-        intensity: animatedIntensity.value,
-        color,
-    }));
+    const orbColor = useDerivedValue(() => {
+        switch (state) {
+            case 'idle': return [0.388, 0.4, 0.945];      // Indigo
+            case 'listening': return [0.937, 0.267, 0.267]; // Pulse Red
+            case 'thinking': return [0.639, 0.388, 0.945];  // Violet
+            case 'speaking': return [0.078, 0.945, 0.584];  // Energy Teal
+            default: return [0.388, 0.4, 0.945];
+        }
+    });
 
     return (
-        <Canvas style={{ width: ORB_SIZE, height: ORB_SIZE }}>
+        <Canvas style={{ width: size, height: size }}>
+            <Fill color="transparent" />
             <Group>
-                <Shader source={orbShader} uniforms={uniforms} />
-                <Circle cx={ORB_SIZE / 2} cy={ORB_SIZE / 2} r={ORB_SIZE / 2}>
-                    <Paint style="fill" />
-                </Circle>
+                <Shader
+                    source={neuralOrbShader}
+                    uniforms={useDerivedValue(() => ({
+                        u_time: time.value,
+                        u_intensity: springIntensity.value,
+                        u_color: orbColor.value,
+                        u_res: [size, size]
+                    }))}
+                />
+                <Circle cx={size / 2} cy={size / 2} r={size / 2} />
             </Group>
         </Canvas>
     );

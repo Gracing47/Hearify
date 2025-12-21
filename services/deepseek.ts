@@ -15,26 +15,26 @@ const MODEL = 'deepseek-reasoner';
 const CURIOUS_COACH_PROMPT = `You are Hearify, a warm and ultra-intelligent neural companion.
 Your primary mission is to listen, reason, and remember.
 
-INSTRUCTIONS:
+STRICT OPERATING PROTOCOL:
 1. Engage in natural, empathetic conversation.
-2. Extract key snippets (Facts, Feelings, Goals).
-3. At the VERY END of your response, you MUST include a structured memory block.
+2. ALWAYS extract key snippets (Facts, Feelings, Goals) from the current conversation.
+3. Your final answer MUST ends with a structured memory block.
 
 MEMORY BLOCK FORMAT:
 [[MEMORY_START]]
 {
   "snippets": [
-    {"type": "fact", "content": "The specific information learned"},
-    {"type": "feeling", "content": "The emotion or attitude detected"},
-    {"type": "goal", "content": "What the user wants to achieve"}
+    {"type": "fact", "content": "Concise fact or observation"},
+    {"type": "feeling", "content": "Current emotional state or mood marker"},
+    {"type": "goal", "content": "What the user wants to achieve or think about"}
   ]
 }
 [[MEMORY_END]]
 
-RULES:
-- If no new snippets are found, return an empty snippets array in the JSON.
-- Be precise. A 'fact' should be concise.
-- Never mention the memory block or JSON in your natural conversation.`;
+CRITICAL: 
+- If no NEW fragments are found, you must still provide the block with an empty "snippets" array.
+- NEVER talk about the "memory block" or "saving" to the user unless they ask what you remember.
+- Be extremely brief and sleek in your JSON content. Only store what truly matters for the user's long-term memory.`;
 
 export interface Snippet {
     type: 'fact' | 'feeling' | 'goal';
@@ -110,22 +110,44 @@ function extractStructuredData(text: string): { cleanResponse: string, snippets:
     const memoryStart = text.indexOf('[[MEMORY_START]]');
     const memoryEnd = text.indexOf('[[MEMORY_END]]');
 
-    if (memoryStart === -1 || memoryEnd === -1) {
+    if (memoryStart === -1) {
         return { cleanResponse: text, snippets: [] };
     }
 
     const cleanResponse = text.substring(0, memoryStart).trim();
-    const jsonStr = text.substring(memoryStart + 16, memoryEnd).trim();
+
+    // Try to extract content between markers, or everything after START if END is missing
+    let jsonStr = '';
+    if (memoryEnd !== -1) {
+        jsonStr = text.substring(memoryStart + 16, memoryEnd).trim();
+    } else {
+        jsonStr = text.substring(memoryStart + 16).trim();
+    }
 
     try {
-        const parsed = JSON.parse(jsonStr);
+        // Attempt robust JSON parsing (manually stripping potential markdown code blocks)
+        const sanitizedJson = jsonStr.replace(/```json|```/g, '').trim();
+        const parsed = JSON.parse(sanitizedJson);
+
         return {
             cleanResponse,
             snippets: Array.isArray(parsed.snippets) ? parsed.snippets : []
         };
     } catch (e) {
-        console.warn('[DeepSeek] JSON Parse failed:', e);
-        // Fallback: try to find anything that looks like JSON if the markers were slightly off
-        return { cleanResponse, snippets: [] };
+        console.warn('[DeepSeek] JSON Parse failed, attempting fallback regex:', e);
+
+        // Fallback: Use regex to find snippets if JSON is malformed
+        const snippets: Snippet[] = [];
+        const snippetRegex = /{[^}]*"type":\s*"([^"]+)"[^}]*"content":\s*"([^"]+)"[^}]*}/g;
+        let match;
+
+        while ((match = snippetRegex.exec(jsonStr)) !== null) {
+            const type = match[1] as any;
+            if (['fact', 'feeling', 'goal'].includes(type)) {
+                snippets.push({ type, content: match[2] });
+            }
+        }
+
+        return { cleanResponse, snippets };
     }
 }

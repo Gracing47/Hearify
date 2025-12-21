@@ -13,17 +13,21 @@ import {
     Skia,
     Line as SkiaLine
 } from '@shopify/react-native-skia';
-import React, { useEffect, useState } from 'react';
-import { Animated, Dimensions, StyleSheet } from 'react-native';
+import { BlurView } from 'expo-blur';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Dimensions, Pressable, StyleSheet, Text, View } from 'react-native';
 import {
     Gesture,
     GestureDetector,
     GestureHandlerRootView
 } from 'react-native-gesture-handler';
-import {
+import Animated, {
+    FadeIn,
+    FadeOut,
+    runOnJS,
     useAnimatedStyle,
     useFrameCallback,
-    useSharedValue,
+    useSharedValue
 } from 'react-native-reanimated';
 import { getAllSnippets, initDatabase } from '../db';
 import { Snippet } from '../db/schema';
@@ -82,6 +86,7 @@ interface NodeData extends Snippet {
 
 export function NeuralCanvas() {
     const [nodes, setNodes] = useState<NodeData[]>([]);
+    const [selectedNode, setSelectedNode] = useState<NodeData | null>(null);
 
     // Canvas Transform State
     const translateX = useSharedValue(0);
@@ -144,15 +149,20 @@ export function NeuralCanvas() {
     const nodeDragX = useSharedValue(0);
     const nodeDragY = useSharedValue(0);
 
+    const handleNodeTap = useCallback((node: NodeData) => {
+        setSelectedNode(node);
+    }, []);
+
     const tapGesture = Gesture.Tap()
         .onStart((e) => {
+            'worklet';
             // Check if we hit a node (naive distance check)
             for (const node of nodes) {
                 const nodeScreenX = node.x + width / 2 + translateX.value;
                 const nodeScreenY = node.y + height / 2 + translateY.value;
                 const d = Math.hypot(e.x - nodeScreenX, e.y - nodeScreenY);
-                if (d < 45) {
-                    console.log('[Canvas] Node Tapped:', node.content);
+                if (d < 60) { // Increased hit area for better UX
+                    runOnJS(handleNodeTap)(node);
                     break;
                 }
             }
@@ -160,11 +170,12 @@ export function NeuralCanvas() {
 
     const longPressGesture = Gesture.LongPress()
         .onStart((e) => {
+            'worklet';
             for (const node of nodes) {
                 const nodeScreenX = node.x + width / 2 + translateX.value;
                 const nodeScreenY = node.y + height / 2 + translateY.value;
                 const d = Math.hypot(e.x - nodeScreenX, e.y - nodeScreenY);
-                if (d < 45) {
+                if (d < 60) {
                     activeNodeId.value = node.id;
                     break;
                 }
@@ -265,6 +276,43 @@ export function NeuralCanvas() {
                     </Canvas>
                 </Animated.View>
             </GestureDetector>
+
+            {/* Liquid Glass Node Detail Modal (2025 Trend) */}
+            {selectedNode && (
+                <Pressable
+                    style={styles.modalOverlay}
+                    onPress={() => setSelectedNode(null)}
+                >
+                    <Animated.View
+                        entering={FadeIn.springify().damping(15)}
+                        exiting={FadeOut.duration(200)}
+                        style={styles.nodeDetailCard}
+                    >
+                        <BlurView intensity={40} tint="dark" style={styles.nodeDetailBlur}>
+                            <View style={styles.nodeDetailHeader}>
+                                <View style={[
+                                    styles.nodeTypeBadge,
+                                    selectedNode.type === 'goal' && styles.goalBadge,
+                                    selectedNode.type === 'feeling' && styles.feelingBadge,
+                                    selectedNode.type === 'fact' && styles.factBadge,
+                                ]} />
+                                <Text style={styles.nodeTypeLabel}>
+                                    {selectedNode.type === 'goal' ? '🎯 GOAL' :
+                                        selectedNode.type === 'feeling' ? '💜 FEELING' : '💡 FACT'}
+                                </Text>
+                            </View>
+                            <Text style={styles.nodeContent}>{selectedNode.content}</Text>
+                            <Text style={styles.nodeTimestamp}>
+                                {new Date(selectedNode.timestamp).toLocaleDateString('de-DE', {
+                                    day: 'numeric',
+                                    month: 'long',
+                                    year: 'numeric'
+                                })}
+                            </Text>
+                        </BlurView>
+                    </Animated.View>
+                </Pressable>
+            )}
         </GestureHandlerRootView>
     );
 }
@@ -302,5 +350,70 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         lineHeight: 22,
         fontWeight: '500',
-    }
+    },
+    // 2025/2026 Liquid Glass Modal Styles
+    modalOverlay: {
+        ...StyleSheet.absoluteFillObject,
+        backgroundColor: 'rgba(0, 0, 0, 0.6)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        zIndex: 1000,
+    },
+    nodeDetailCard: {
+        width: width * 0.85,
+        maxWidth: 400,
+        borderRadius: 28,
+        overflow: 'hidden',
+        shadowColor: '#6366f1',
+        shadowOffset: { width: 0, height: 20 },
+        shadowOpacity: 0.4,
+        shadowRadius: 40,
+        elevation: 20,
+    },
+    nodeDetailBlur: {
+        padding: 28,
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.12)',
+        borderRadius: 28,
+    },
+    nodeDetailHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 20,
+    },
+    nodeTypeBadge: {
+        width: 12,
+        height: 12,
+        borderRadius: 6,
+        marginRight: 10,
+    },
+    goalBadge: {
+        backgroundColor: '#F1C40F',
+    },
+    feelingBadge: {
+        backgroundColor: '#A855F7',
+    },
+    factBadge: {
+        backgroundColor: '#14F195',
+    },
+    nodeTypeLabel: {
+        fontSize: 12,
+        fontWeight: '800',
+        color: '#6366f1',
+        letterSpacing: 2,
+        textTransform: 'uppercase',
+    },
+    nodeContent: {
+        fontSize: 18,
+        fontWeight: '500',
+        color: '#fff',
+        lineHeight: 28,
+        letterSpacing: -0.3,
+    },
+    nodeTimestamp: {
+        marginTop: 20,
+        fontSize: 12,
+        color: 'rgba(255, 255, 255, 0.4)',
+        fontWeight: '500',
+    },
 });

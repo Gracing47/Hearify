@@ -12,6 +12,7 @@ export interface Message {
     id: string;
     role: 'user' | 'assistant';
     content: string;
+    reasoning?: string;
     timestamp: number;
 }
 
@@ -27,7 +28,7 @@ export interface ConversationState {
 
 export interface ConversationActions {
     addUserMessage: (content: string) => void;
-    addAIResponse: (content: string) => void;
+    addAIResponse: (content: string, reasoning?: string) => void;
     setTranscribing: (value: boolean) => void;
     setReasoning: (value: boolean) => void;
     setEmbedding: (value: boolean) => void;
@@ -61,13 +62,14 @@ export const useConversationStore = create<ConversationState & ConversationActio
         ],
     })),
 
-    addAIResponse: (content: string) => set((state) => ({
+    addAIResponse: (content: string, reasoning?: string) => set((state) => ({
         messages: [
             ...state.messages,
             {
                 id: Date.now().toString(),
                 role: 'assistant',
                 content,
+                reasoning,
                 timestamp: Date.now(),
             },
         ],
