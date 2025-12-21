@@ -1,9 +1,9 @@
 /**
- * Settings screen for API key configuration
+ * Settings screen for API key configuration and profile management
  * 
  * Dev notes:
  * - SecureTextEntry for API keys
- * - Validates and saves to MMKV
+ * - Profile switcher for multi-user testing
  */
 
 import { BlurView } from 'expo-blur';
@@ -28,6 +28,7 @@ import {
     setGroqKey,
     setOpenAIKey,
 } from '../config/api';
+import { useProfileStore } from '../store/profile';
 
 export function SettingsScreen() {
     const [groqKey, setLocalGroqKey] = useState('');
@@ -36,6 +37,9 @@ export function SettingsScreen() {
     const [elevenLabsKey, setLocalElevenLabsKey] = useState('');
     const [isConfigured, setIsConfigured] = useState(false);
     const [isLoading, setIsLoading] = useState(true);
+    const [newProfileName, setNewProfileName] = useState('');
+
+    const { currentProfile, allProfiles, switchProfile, createProfile, deleteProfile } = useProfileStore();
 
     React.useEffect(() => {
         const loadKeys = async () => {
@@ -80,6 +84,27 @@ export function SettingsScreen() {
         }
     };
 
+    const handleCreateProfile = async () => {
+        if (!newProfileName.trim()) {
+            Alert.alert('Error', 'Bitte gib einen Namen ein');
+            return;
+        }
+        await createProfile(newProfileName.trim());
+        setNewProfileName('');
+        Alert.alert('Profil erstellt', `Profil "${newProfileName}" wurde erstellt und aktiviert.`);
+    };
+
+    const handleDeleteProfile = (profileId: string, profileName: string) => {
+        Alert.alert(
+            'Profil löschen',
+            `Bist du sicher, dass du "${profileName}" löschen möchtest? Alle Erinnerungen gehen verloren.`,
+            [
+                { text: 'Abbrechen', style: 'cancel' },
+                { text: 'Löschen', style: 'destructive', onPress: () => deleteProfile(profileId) },
+            ]
+        );
+    };
+
     const insets = useSafeAreaInsets();
 
     return (
@@ -97,8 +122,59 @@ export function SettingsScreen() {
             >
                 <Text style={styles.title}>Neural Settings</Text>
                 <Text style={styles.subtitle}>
-                    Configure your API keys to authorize Hearify's advanced R1 reasoning and voice synthesis.
+                    Verwalte Profile und API-Schlüssel für Hearify's R1-Intelligenz.
                 </Text>
+
+                {/* Profile Section */}
+                <View style={styles.profileSection}>
+                    <Text style={styles.sectionTitle}>👤 Profil</Text>
+
+                    {/* Current Profile */}
+                    <BlurView intensity={20} tint="dark" style={styles.currentProfileCard}>
+                        <Text style={styles.profileEmoji}>{currentProfile?.avatarEmoji || '🧠'}</Text>
+                        <View style={styles.profileInfo}>
+                            <Text style={styles.profileName}>{currentProfile?.name || 'Kein Profil'}</Text>
+                            <Text style={styles.profileHint}>Aktives Profil</Text>
+                        </View>
+                    </BlurView>
+
+                    {/* Switch Profile */}
+                    {allProfiles.length > 1 && (
+                        <View style={styles.profileList}>
+                            <Text style={styles.profileListTitle}>Profilwechsel</Text>
+                            {allProfiles.filter(p => p.id !== currentProfile?.id).map(profile => (
+                                <TouchableOpacity
+                                    key={profile.id}
+                                    style={styles.profileListItem}
+                                    onPress={() => switchProfile(profile.id)}
+                                    onLongPress={() => handleDeleteProfile(profile.id, profile.name)}
+                                >
+                                    <Text style={styles.profileListEmoji}>{profile.avatarEmoji}</Text>
+                                    <Text style={styles.profileListName}>{profile.name}</Text>
+                                </TouchableOpacity>
+                            ))}
+                        </View>
+                    )}
+
+                    {/* Create New Profile */}
+                    <View style={styles.newProfileRow}>
+                        <TextInput
+                            style={styles.newProfileInput}
+                            placeholder="Neues Profil..."
+                            placeholderTextColor="#555"
+                            value={newProfileName}
+                            onChangeText={setNewProfileName}
+                            maxLength={15}
+                        />
+                        <TouchableOpacity
+                            style={[styles.newProfileButton, !newProfileName.trim() && styles.buttonDisabled]}
+                            onPress={handleCreateProfile}
+                            disabled={!newProfileName.trim()}
+                        >
+                            <Text style={styles.newProfileButtonText}>+</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
 
                 {isConfigured && (
                     <BlurView intensity={20} tint="dark" style={styles.badge}>
@@ -280,5 +356,96 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         marginBottom: 40,
         lineHeight: 18,
+    },
+    // Profile Styles
+    profileSection: {
+        marginBottom: 32,
+    },
+    sectionTitle: {
+        fontSize: 16,
+        fontWeight: '800',
+        color: '#fff',
+        marginBottom: 16,
+    },
+    currentProfileCard: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 16,
+        borderRadius: 16,
+        backgroundColor: 'rgba(99, 102, 241, 0.1)',
+        borderWidth: 1,
+        borderColor: 'rgba(99, 102, 241, 0.2)',
+        marginBottom: 16,
+    },
+    profileEmoji: {
+        fontSize: 32,
+        marginRight: 16,
+    },
+    profileInfo: {
+        flex: 1,
+    },
+    profileName: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#fff',
+    },
+    profileHint: {
+        fontSize: 12,
+        color: '#6366f1',
+        marginTop: 2,
+    },
+    profileList: {
+        marginBottom: 16,
+    },
+    profileListTitle: {
+        fontSize: 12,
+        color: '#666',
+        marginBottom: 8,
+        textTransform: 'uppercase',
+        letterSpacing: 1,
+    },
+    profileListItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        padding: 12,
+        backgroundColor: 'rgba(255,255,255,0.03)',
+        borderRadius: 12,
+        marginBottom: 8,
+    },
+    profileListEmoji: {
+        fontSize: 20,
+        marginRight: 12,
+    },
+    profileListName: {
+        fontSize: 15,
+        color: '#ccc',
+    },
+    newProfileRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+    },
+    newProfileInput: {
+        flex: 1,
+        backgroundColor: 'rgba(255,255,255,0.03)',
+        borderWidth: 1,
+        borderColor: '#222',
+        borderRadius: 12,
+        padding: 14,
+        color: '#fff',
+        fontSize: 15,
+    },
+    newProfileButton: {
+        width: 48,
+        height: 48,
+        borderRadius: 12,
+        backgroundColor: '#6366f1',
+        justifyContent: 'center',
+        alignItems: 'center',
+    },
+    newProfileButtonText: {
+        fontSize: 24,
+        color: '#fff',
+        fontWeight: '600',
     },
 });

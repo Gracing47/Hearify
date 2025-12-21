@@ -52,10 +52,18 @@ export function useTTS() {
     // Cleanup on unmount
     useEffect(() => {
         return () => {
-            player.pause();
+            try {
+                // Only pause if player exists and is valid
+                if (player && typeof player.pause === 'function') {
+                    player.pause();
+                }
+            } catch (e) {
+                // Player already released, ignore
+                console.log('[TTS] Cleanup: player already released');
+            }
             cleanupTTSCache();
         };
-    }, [player]);
+    }, []);
 
     /**
      * Generate and play TTS audio

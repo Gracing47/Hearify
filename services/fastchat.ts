@@ -7,7 +7,10 @@ import { getGroqKey } from '../config/api';
 const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions';
 const FAST_MODEL = 'llama-3.3-70b-versatile'; // Updated to current Groq model
 
-const INSTANT_ANSWER_PROMPT = `You are Hearify, a warm and ultra-intelligent neural companion.
+function buildSystemPrompt(userName?: string): string {
+    const userContext = userName ? `\n\nIMPORTANT: The user's name is "${userName}". Use their name naturally in conversation when appropriate.` : '';
+
+    return `You are Hearify, a warm and ultra-intelligent neural companion.
 Your goal is to handle as much conversation as possible instantly.
 
 STRICT INSTRUCTIONS:
@@ -26,9 +29,10 @@ STRICT INSTRUCTIONS:
 
 Response Style:
 - Friendly, obsidian-themed aesthetic in tone (premium, sleek, brief).
-- Never mention "Fast Path" or "Reasoning". Just respond or say "Thinking..." if deep thought is needed.`;
+- Never mention "Fast Path" or "Reasoning". Just respond or say "Thinking..." if deep thought is needed.${userContext}`;
+}
 
-export async function getFastResponse(text: string): Promise<string> {
+export async function getFastResponse(text: string, userName?: string): Promise<string> {
     const apiKey = await getGroqKey();
     if (!apiKey) throw new Error('Groq API key not configured');
 
@@ -42,7 +46,7 @@ export async function getFastResponse(text: string): Promise<string> {
             body: JSON.stringify({
                 model: FAST_MODEL,
                 messages: [
-                    { role: 'system', content: INSTANT_ANSWER_PROMPT },
+                    { role: 'system', content: buildSystemPrompt(userName) },
                     { role: 'user', content: text }
                 ],
                 temperature: 0.5,
@@ -64,3 +68,4 @@ export async function getFastResponse(text: string): Promise<string> {
         throw error;
     }
 }
+

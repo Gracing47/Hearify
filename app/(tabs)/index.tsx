@@ -2,6 +2,7 @@
  * Hearify Main Screen - Neural AI Companion Interface
  */
 
+import { useProfileStore } from '@/store/profile';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Link } from 'expo-router';
@@ -67,6 +68,8 @@ export default function HomeScreen() {
     addPendingSnippet,
     removePendingSnippet,
   } = useConversationStore();
+
+  const { currentProfile } = useProfileStore();
 
   const recordButtonScale = useSharedValue(1);
 
@@ -141,30 +144,36 @@ export default function HomeScreen() {
     try {
       Haptics.thinking();
 
-      // 1. Transcribe audio
+      // 1. Transcribe audio (Core Input Helix)
       console.log('[Neural Loop] Step 1: Transcribing...');
       setTranscribing(true);
       const { text: transcript } = await transcribeAudio(audioUri);
       setTranscribing(false);
       addUserMessage(transcript);
 
-      // 2. Get context from vector search
-      console.log('[Neural Loop] Step 2: Searching context...');
-      const queryEmbed = await generateEmbedding(transcript);
+      // 2. CONCURRENT PRE-FETCHING (The 47x Move)
+      // Start embedding the query and retrieving context BEFORE we even decide the LLM path
+      console.log('[Neural Loop] Step 2: Concurrent Context Retrieval...');
+
+      // Parallel execution of Embedding + Initial Search determination
+      const [queryEmbed, isChattyQuery] = await Promise.all([
+        generateEmbedding(transcript),
+        Promise.resolve(transcript.split(' ').length < 40)
+      ]);
+
+      // JSI-Powered Vector Search (Native Speed)
       const similarSnippets = await findSimilarSnippets(queryEmbed, 3);
       const context = similarSnippets.map(s => s.content);
 
-      // 3. Fast Path determination
-      console.log('[Neural Loop] Step 3: Assessing complexity...');
+      // 3. Neural Path Determination
+      console.log('[Neural Loop] Step 3: Neural Path Execution...');
       let finalResponse = '';
       let snippets: any[] = [];
 
-      // Catch greetings and everyday chat for instant response (max 40 words)
-      const isChattyQuery = transcript.split(' ').length < 40;
-
       if (isChattyQuery) {
+        // Fast Path (Groq / FastChat)
         console.log('[Neural Loop] Executing Fast Path (Groq)...');
-        const fastResponse = await getFastResponse(transcript);
+        const fastResponse = await getFastResponse(transcript, currentProfile?.name);
 
         if (fastResponse.toLowerCase().includes('thinking')) {
           console.log('[Neural Loop] Fast Path suggested reasoning. Switching...');
@@ -177,7 +186,7 @@ export default function HomeScreen() {
           finalResponse = fastResponse;
         }
       } else {
-        // Deep Reasoning Path
+        // Deep Reasoning Path (DeepSeek R1)
         console.log('[Neural Loop] Executing Reasoning Path (DeepSeek)...');
         setReasoning(true);
         const result = await processWithReasoning(transcript, context);

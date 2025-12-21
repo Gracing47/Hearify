@@ -24,7 +24,9 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "permissions": [
-        "RECORD_AUDIO"
+        "RECORD_AUDIO",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.MODIFY_AUDIO_SETTINGS"
       ],
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
@@ -48,18 +50,19 @@
         }
       ],
       "expo-secure-store",
-      "expo-audio",
-      [
-        "@op-engineering/op-sqlite",
-        {
-          "sqliteVec": true
-        }
-      ]
+      "expo-audio"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true,
       "autolinkingModuleResolution": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "7457c46b-8075-45b7-92c2-3e2dc1dce110"
+      }
+    },
+    "owner": "repoleved47"
   }
 }

@@ -2,24 +2,67 @@ import { DB, open } from '@op-engineering/op-sqlite';
 import { SCHEMA, type Snippet } from './schema';
 
 let db: DB | null = null;
+let currentDbName: string = 'hearify.db';
 
 /**
  * Initialize native database connection
+ * @param dbName - Optional database name for profile isolation (default: 'hearify.db')
  */
-export async function initDatabase(): Promise<DB> {
+export async function initDatabase(dbName?: string): Promise<DB> {
+    const targetDbName = dbName || 'hearify.db';
+
+    // If switching to a different database, close the current one
+    if (db && currentDbName !== targetDbName) {
+        console.log(`[DB] Switching database from ${currentDbName} to ${targetDbName}`);
+        db.close();
+        db = null;
+    }
+
     if (db) return db;
+
+    currentDbName = targetDbName;
 
     // Open database with sqlite-vec extension enabled
     db = open({
-        name: 'hearify.db',
+        name: targetDbName,
     });
 
-    // Create tables
-    await db.execute(SCHEMA.snippets);
-    await db.execute(SCHEMA.vectorTable);
+    // Create tables (individual execution for safety)
+    const statements = [
+        SCHEMA.snippets,
+        SCHEMA.vectorTable
+    ];
 
-    console.log('[DB] Native JSI Database initialized with sqlite-vec');
+    for (const sql of statements) {
+        // Simple regex split for safety if schema contains multiple statements
+        const individualStatements = sql.split(';').map(s => s.trim()).filter(s => s.length > 0);
+        for (const stmt of individualStatements) {
+            try {
+                await db.execute(stmt);
+            } catch (e) {
+                console.warn(`[DB] Note: Statement execution: ${e}`);
+            }
+        }
+    }
+
+    // Run migrations for spatial canvas
+    for (const migration of SCHEMA.migrations) {
+        try {
+            await db.execute(migration);
+        } catch (e) {
+            // Likely column already exists, which is fine
+        }
+    }
+
+    console.log(`[DB] Native JSI Database initialized: ${targetDbName}`);
     return db;
+}
+
+/**
+ * Get current database name
+ */
+export function getCurrentDbName(): string {
+    return currentDbName;
 }
 
 /**
@@ -36,15 +79,17 @@ function getDb(): DB {
 export async function insertSnippet(
     content: string,
     type: 'fact' | 'feeling' | 'goal',
-    embedding: Float32Array
+    embedding: Float32Array,
+    x: number = Math.random() * 400 - 200,
+    y: number = Math.random() * 400 - 200
 ): Promise<number> {
     const database = getDb();
     const timestamp = Date.now();
 
     // 1. Insert into main table
     const result = await database.execute(
-        'INSERT INTO snippets (content, type, timestamp) VALUES (?, ?, ?)',
-        [content, type, timestamp]
+        'INSERT INTO snippets (content, type, timestamp, x, y) VALUES (?, ?, ?, ?, ?)',
+        [content, type, timestamp, x, y]
     );
 
     const snippetId = result.insertId!;
@@ -55,7 +100,7 @@ export async function insertSnippet(
         [snippetId, embedding]
     );
 
-    console.log(`[DB] Native Insert: ${snippetId}`);
+    console.log(`[DB] Native Insert: ${snippetId} at (${x.toFixed(1)}, ${y.toFixed(1)})`);
     return snippetId;
 }
 
@@ -72,18 +117,20 @@ export async function findSimilarSnippets(
 
     // Native vector search query
     // k-nearest neighbors using cosine distance
+    // sqlite-vec requires 'k = ?' in WHERE clause for vec0 tables
     const query = `
         SELECT 
             s.id, 
             s.content, 
             s.type, 
             s.timestamp,
+            s.x,
+            s.y,
             v.distance
         FROM vec_snippets v
         JOIN snippets s ON s.id = v.id
-        WHERE embedding MATCH ?
+        WHERE embedding MATCH ? AND k = ?
         ORDER BY distance
-        LIMIT ?
     `;
 
     const results = await database.execute(query, [queryEmbedding, limit]);
