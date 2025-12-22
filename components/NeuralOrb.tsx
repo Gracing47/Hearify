@@ -1,5 +1,5 @@
 /**
- * Neural Orb - The Soul of Hearify
+ * Neural Orb - The Soul of Orbit
  * High-fidelity SKSL Shader with refraction and organic distortion.
  */
 

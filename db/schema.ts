@@ -6,6 +6,7 @@
  */
 
 export interface Snippet {
+  cluster_id: number;
   id: number;
   content: string;
   type: 'fact' | 'feeling' | 'goal';
@@ -33,15 +34,32 @@ export const SCHEMA = {
       x REAL DEFAULT 0,
       y REAL DEFAULT 0
     );
-    CREATE INDEX IF NOT EXISTS idx_snippets_timestamp ON snippets(timestamp);
     CREATE INDEX IF NOT EXISTS idx_snippets_type ON snippets(type);
   `,
+  // Tier 1: Fast Vector Shadow Table (384-dim for real-time)
+  vectorTableFast: `
+    CREATE VIRTUAL TABLE IF NOT EXISTS vec_snippets_fast USING vec0(
+      id INTEGER PRIMARY KEY,
+      embedding float[384]
+    );
+  `,
 
-  // Native Vector Shadow Table (sqlite-vec)
-  vectorTable: `
+  // Tier 2: Rich Vector Shadow Table (1536-dim for deep context) - Already exists
+  vectorTableRich: `
     CREATE VIRTUAL TABLE IF NOT EXISTS vec_snippets USING vec0(
       id INTEGER PRIMARY KEY,
       embedding float[1536]
+    );
+  `,
+
+  // Semantic Clusters
+  clusters: `
+    CREATE TABLE IF NOT EXISTS clusters (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      label TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      node_count INTEGER DEFAULT 0
     );
   `,
 
@@ -50,6 +68,9 @@ export const SCHEMA = {
     `ALTER TABLE snippets ADD COLUMN x REAL DEFAULT 0;`,
     `ALTER TABLE snippets ADD COLUMN y REAL DEFAULT 0;`,
     `ALTER TABLE snippets ADD COLUMN sentiment TEXT DEFAULT 'neutral';`,
-    `ALTER TABLE snippets ADD COLUMN topic TEXT DEFAULT 'misc';`
+    `ALTER TABLE snippets ADD COLUMN topic TEXT DEFAULT 'misc';`,
+    `ALTER TABLE snippets ADD COLUMN cluster_id INTEGER;`,
+    `CREATE INDEX IF NOT EXISTS idx_snippets_cluster ON snippets(cluster_id);`
   ]
 };
+

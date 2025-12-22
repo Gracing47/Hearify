@@ -42,3 +42,10 @@ export function error(): void {
 export function pulse(): void {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Rigid);
 }
+
+/**
+ * Haptic feedback for selection (tap)
+ */
+export function selection(): void {
+    Haptics.selectionAsync();
+}

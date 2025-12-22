@@ -10,6 +10,13 @@
                 "buildType": "apk"
             }
         },
+        "development-device": {
+            "developmentClient": true,
+            "distribution": "internal",
+            "ios": {
+                "simulator": false
+            }
+        },
         "preview": {
             "distribution": "internal"
         },

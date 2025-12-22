@@ -62,7 +62,7 @@ export default function OnboardingScreen() {
                     {/* Welcome Message */}
                     <Animated.View entering={FadeInUp.delay(200)} style={styles.header}>
                         <Text style={styles.welcomeEmoji}>🌌</Text>
-                        <Text style={styles.title}>Willkommen bei Hearify</Text>
+                        <Text style={styles.title}>Willkommen bei Orbit</Text>
                         <Text style={styles.subtitle}>
                             Dein persönliches Gedächtnis-Universum.{'\n'}
                             Alles was du sagst, wird ein Stern in deinem Raum.

@@ -1,6 +1,6 @@
 /**
  * SideMenu - Elegant Slide-out Navigation Menu
- * Premium glassmorphism drawer for Hearify
+ * Premium glassmorphism drawer for Orbit
  */
 
 import { BlurView } from 'expo-blur';
@@ -35,7 +35,7 @@ interface MenuItem {
 }
 
 const menuItems: MenuItem[] = [
-    { key: 'home', label: 'Hearify', icon: '🏠', route: '/(tabs)' },
+    { key: 'home', label: 'Orbit', icon: '🏠', route: '/(tabs)' },
     { key: 'horizon', label: 'Horizon', icon: '🧠', route: '/(tabs)/canvas' },
     { key: 'memory', label: 'Memory', icon: '📋', route: '/(tabs)/explore' },
 ];
@@ -52,6 +52,12 @@ export function SideMenu({ isOpen, onClose, activeRoute = 'home' }: SideMenuProp
 
     const handleNavigation = (route: MenuItem['route']) => {
         onClose();
+        // Since we are using MindLayout, we might need a context to switch vertical index? 
+        // For now, let's just keep router logic as the files exist, 
+        // but arguably they are now just one screen. 
+        // If the user wants vertical swipe ONLY, the menu might be redundant for navigation 
+        // but useful for other things. 
+        // Let's leave it as is, but maybe fix if routes are dead.
         setTimeout(() => {
             router.push(route);
         }, 150);
@@ -93,7 +99,7 @@ export function SideMenu({ isOpen, onClose, activeRoute = 'home' }: SideMenuProp
 
                     {/* Header */}
                     <View style={styles.menuHeader}>
-                        <Text style={styles.menuTitle}>Hearify</Text>
+                        <Text style={styles.menuTitle}>Orbit</Text>
                         <Text style={styles.menuSubtitle}>Neural Companion</Text>
                     </View>
 

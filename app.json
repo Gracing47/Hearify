@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Hearify",
-    "slug": "Hearify",
+    "name": "Orbit",
+    "slug": "orbit",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -12,7 +12,8 @@
       "supportsTablet": true,
       "bundleIdentifier": "com.blexx.hearify",
       "infoPlist": {
-        "NSMicrophoneUsageDescription": "Hearify needs access to your microphone to capture your voice and create a neural memory."
+        "NSMicrophoneUsageDescription": "Hearify needs access to your microphone to capture your voice and create a neural memory.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {

@@ -36,6 +36,8 @@ import { getFastResponse } from '../../services/fastchat';
 import { transcribeAudio } from '../../services/groq';
 import { generateEmbedding, generateEmbeddings } from '../../services/openai';
 import { useConversationStore } from '../../store/conversation';
+
+import { IntelligenceService } from '@/services/intelligence';
 import * as Haptics from '../../utils/haptics';
 
 type AppState = 'idle' | 'listening' | 'processing' | 'speaking';
@@ -147,7 +149,7 @@ export default function HomeScreen() {
 
       setEmbedding(true); // Re-use embedding state for retrieval feedback
       const [queryEmbed, isChattyQuery] = await Promise.all([
-        generateEmbedding(transcript),
+        generateEmbedding(transcript, 'text-embedding-3-large', 1536),
         Promise.resolve(
           transcript.split(' ').length < 15 &&
           !/will|muss|soll|ziel|plan|merke|notier|fakt|wichtig|wahr|wer|was|erinnerst|weißt/i.test(transcript)
@@ -188,21 +190,39 @@ export default function HomeScreen() {
         setReasoning(false);
       }
 
-      console.log('[Neural Loop] Step 4: Embedding snippets...');
+      console.log('[Neural Loop] Step 4: Embedding snippets (Dual-Tier)...');
       setEmbedding(true);
       if (snippets.length > 0) {
         const contents = snippets.map(s => s.content);
-        const embeddings = await generateEmbeddings(contents);
+
+        // Generate both tiers for maximum performance/context balance
+        const [richEmbeds, fastEmbeds] = await Promise.all([
+          generateEmbeddings(contents, 'text-embedding-3-large', 1536),
+          generateEmbeddings(contents, 'text-embedding-3-small', 384)
+        ]);
 
         for (let i = 0; i < snippets.length; i++) {
           const snippet = snippets[i];
-          await insertSnippet(snippet.content, snippet.type, embeddings[i], snippet.sentiment, snippet.topic);
+          await insertSnippet(
+            snippet.content,
+            snippet.type,
+            richEmbeds[i],
+            fastEmbeds[i],
+            snippet.sentiment,
+            snippet.topic
+          );
           addPendingSnippet({ type: snippet.type, content: snippet.content });
         }
       }
       setEmbedding(false);
 
+      setEmbedding(false);
+
+      // Trigger asynchronous community detection
+      IntelligenceService.runClustering().catch(e => console.error('[Intelligence] Clustering failed:', e));
+
       console.log('[Neural Loop] Step 5: Speaking...');
+
       Haptics.speaking();
       addAIResponse(finalResponse, finalReasoning);
       setAppState('speaking');
@@ -266,7 +286,7 @@ export default function HomeScreen() {
         {/* Minimal Header with Burger */}
         <View style={styles.header}>
           <BurgerMenuButton onPress={() => setMenuOpen(true)} />
-          <Text style={styles.headerTitle}>Hearify</Text>
+          <Text style={styles.headerTitle}>Orbit</Text>
           <View style={styles.statusPill}>
             <View style={styles.statusDot} />
             <Text style={styles.statusText}>R1</Text>

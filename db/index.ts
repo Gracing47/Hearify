@@ -28,19 +28,30 @@ export async function initDatabase(dbName?: string): Promise<DB> {
     });
 
     // Create tables (individual execution for safety)
+    // Execute Schema Statements
     const statements = [
-        SCHEMA.snippets,
-        SCHEMA.vectorTable
+        SCHEMA.snippets,        // Contains TABLE + INDEX
+        SCHEMA.vectorTableFast, // Virtual Table
+        SCHEMA.vectorTableRich, // Virtual Table
+        SCHEMA.clusters         // Standard Table
     ];
 
-    for (const sql of statements) {
-        // Simple regex split for safety if schema contains multiple statements
-        const individualStatements = sql.split(';').map(s => s.trim()).filter(s => s.length > 0);
-        for (const stmt of individualStatements) {
+    for (const sqlBlock of statements) {
+        // Naive split by ';' is risky if constraints contain ';', but standard SQL usually terminates with ;
+        // We will filter out empty strings/whitespace
+        const queries = sqlBlock
+            .split(';')
+            .map(s => s.trim())
+            .filter(s => s.length > 0);
+
+        for (const query of queries) {
             try {
-                await db.execute(stmt);
-            } catch (e) {
-                console.warn(`[DB] Note: Statement execution: ${e}`);
+                await db.execute(query);
+            } catch (e: any) {
+                // Ignore specific "table already exists" errors if they aren't caught by IF NOT EXISTS
+                if (!e.message?.includes('already exists')) {
+                    console.warn(`[DB] Schema Warning: ${e.message} \nQuery: ${query.substring(0, 50)}...`);
+                }
             }
         }
     }
@@ -79,7 +90,8 @@ function getDb(): DB {
 export async function insertSnippet(
     content: string,
     type: 'fact' | 'feeling' | 'goal',
-    embedding: Float32Array,
+    embeddingRich: Float32Array,
+    embeddingFast?: Float32Array,
     sentiment: 'analytical' | 'positive' | 'creative' | 'neutral' = 'neutral',
     topic: string = 'misc',
     x: number = Math.random() * 400 - 200,
@@ -96,15 +108,25 @@ export async function insertSnippet(
 
     const snippetId = result.insertId!;
 
-    // 2. Insert into native vector table
+    // 2. Insert into native vector tables
+    // Tier 2 (Rich)
     await database.execute(
         'INSERT INTO vec_snippets (id, embedding) VALUES (?, ?)',
-        [snippetId, embedding]
+        [snippetId, embeddingRich]
     );
 
-    console.log(`[DB] Native Insert: ${snippetId} [${topic}/${sentiment}] at (${x.toFixed(1)}, ${y.toFixed(1)})`);
+    // Tier 1 (Fast)
+    if (embeddingFast) {
+        await database.execute(
+            'INSERT INTO vec_snippets_fast (id, embedding) VALUES (?, ?)',
+            [snippetId, embeddingFast]
+        );
+    }
+
+    console.log(`[DB] Native Insert: ${snippetId} [${topic}/${sentiment}] with dual-embeddings`);
     return snippetId;
 }
+
 
 /**
  * Find similar snippets using native sqlite-vec search
@@ -174,6 +196,70 @@ export async function getAllSnippetsWithEmbeddings(): Promise<Snippet[]> {
         ...row,
         embedding: row.embedding ? new Float32Array(row.embedding as ArrayBuffer) : undefined
     })) as unknown as Snippet[];
+}
+
+/**
+ * Get all snippets with their fast (384-dim) embeddings
+ */
+export async function getAllSnippetsWithFastEmbeddings(): Promise<Snippet[]> {
+    const database = getDb();
+    const query = `
+        SELECT 
+            s.*,
+            v.embedding as embedding_fast
+        FROM snippets s
+        LEFT JOIN vec_snippets_fast v ON s.id = v.id
+        ORDER BY s.timestamp DESC
+    `;
+    const results = await database.execute(query);
+
+    const rows = results.rows || [];
+    return rows.map(row => ({
+        ...row,
+        embedding: row.embedding_fast ? new Float32Array(row.embedding_fast as ArrayBuffer) : undefined
+    })) as unknown as Snippet[];
+}
+
+/**
+ * Update a snippet's cluster assignment
+ */
+export async function updateSnippetCluster(snippetId: number, clusterId: number | null): Promise<void> {
+    const database = getDb();
+    await database.execute(
+        'UPDATE snippets SET cluster_id = ? WHERE id = ?',
+        [clusterId, snippetId]
+    );
+}
+
+/**
+ * Create or update a cluster record
+ */
+export async function upsertCluster(id: number | null, label: string, nodeCount: number): Promise<number> {
+    const database = getDb();
+    const now = Date.now();
+
+    if (id) {
+        await database.execute(
+            'UPDATE clusters SET label = ?, updated_at = ?, node_count = ? WHERE id = ?',
+            [label, now, nodeCount, id]
+        );
+        return id;
+    } else {
+        const result = await database.execute(
+            'INSERT INTO clusters (label, created_at, updated_at, node_count) VALUES (?, ?, ?, ?)',
+            [label, now, now, nodeCount]
+        );
+        return result.insertId!;
+    }
+}
+
+/**
+ * Get all clusters
+ */
+export async function getAllClusters(): Promise<any[]> {
+    const database = getDb();
+    const results = await database.execute('SELECT * FROM clusters');
+    return results.rows || [];
 }
 
 /**

@@ -1,9 +1,5 @@
 /**
- * Neural Horizon 2.0 - Immersive Spatial Memory Experience
- * 
- * Award-winning glassmorphic HUD with live neural statistics
- * The Horizon is not a screen, it's a universe. 
-
+ * Horizon Screen - Neural Horizon 2.0 (formerly CanvasScreen)
  */
 
 import { NeuralCanvas } from '@/components/NeuralCanvas';
@@ -32,7 +28,7 @@ interface NodeStats {
     goals: number;
 }
 
-export default function CanvasScreen() {
+export function HorizonScreen() {
     const insets = useSafeAreaInsets();
     const router = useRouter();
     const [stats, setStats] = useState<NodeStats>({ total: 0, facts: 0, feelings: 0, goals: 0 });
@@ -103,12 +99,11 @@ export default function CanvasScreen() {
                             </View>
                         </View>
 
-                        <Pressable
-                            style={styles.backButton}
-                            onPress={() => router.back()}
-                        >
-                            <Text style={styles.backIcon}>←</Text>
-                        </Pressable>
+                        {/* 
+                         * Back button removed/hidden in MindFlow 
+                         * since gesture navigation replaces it.
+                         * But keeping layout for structure. 
+                         */}
                     </Animated.View>
 
                     {/* Bottom Stats Panel */}
@@ -134,8 +129,6 @@ export default function CanvasScreen() {
                             </View>
                         )}
                     </Animated.View>
-
-
                 </>
             )}
 
