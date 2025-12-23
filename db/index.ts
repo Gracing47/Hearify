@@ -100,31 +100,36 @@ export async function insertSnippet(
     const database = getDb();
     const timestamp = Date.now();
 
-    // 1. Insert into main table with sentiment and topic
-    const result = await database.execute(
-        'INSERT INTO snippets (content, type, sentiment, topic, timestamp, x, y) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [content, type, sentiment, topic, timestamp, x, y]
-    );
-
-    const snippetId = result.insertId!;
-
-    // 2. Insert into native vector tables
-    // Tier 2 (Rich)
-    await database.execute(
-        'INSERT INTO vec_snippets (id, embedding) VALUES (?, ?)',
-        [snippetId, embeddingRich]
-    );
-
-    // Tier 1 (Fast)
-    if (embeddingFast) {
-        await database.execute(
-            'INSERT INTO vec_snippets_fast (id, embedding) VALUES (?, ?)',
-            [snippetId, embeddingFast]
+    try {
+        // 1. Insert into main table with sentiment and topic
+        const result = await database.execute(
+            'INSERT INTO snippets (content, type, sentiment, topic, timestamp, x, y) VALUES (?, ?, ?, ?, ?, ?, ?)',
+            [content, type, sentiment, topic, timestamp, x, y]
         );
-    }
 
-    console.log(`[DB] Native Insert: ${snippetId} [${topic}/${sentiment}] with dual-embeddings`);
-    return snippetId;
+        const snippetId = result.insertId!;
+
+        // 2. Insert into native vector tables
+        // Tier 2 (Rich)
+        await database.execute(
+            'INSERT INTO vec_snippets (id, embedding) VALUES (?, ?)',
+            [snippetId, embeddingRich]
+        );
+
+        // Tier 1 (Fast)
+        if (embeddingFast) {
+            await database.execute(
+                'INSERT INTO vec_snippets_fast (id, embedding) VALUES (?, ?)',
+                [snippetId, embeddingFast]
+            );
+        }
+
+        console.log(`[DB] Native Insert: ${snippetId} [${topic}/${sentiment}] with dual-embeddings`);
+        return snippetId;
+    } catch (error) {
+        console.error('[DB] Insert failed:', error);
+        throw error;
+    }
 }
 
 
@@ -136,42 +141,52 @@ export async function findSimilarSnippets(
     queryEmbedding: Float32Array,
     limit: number = 5
 ): Promise<Snippet[]> {
-    const database = getDb();
-    const startTime = Date.now();
+    try {
+        const database = getDb();
+        const startTime = Date.now();
 
-    // Native vector search query
-    // k-nearest neighbors using cosine distance
-    // sqlite-vec requires 'k = ?' in WHERE clause for vec0 tables
-    const query = `
-        SELECT 
-            s.id, 
-            s.content, 
-            s.type, 
-            s.timestamp,
-            s.x,
-            s.y,
-            v.distance
-        FROM vec_snippets v
-        JOIN snippets s ON s.id = v.id
-        WHERE embedding MATCH ? AND k = ?
-        ORDER BY distance
-    `;
+        // Native vector search query
+        // k-nearest neighbors using cosine distance
+        // sqlite-vec requires 'k = ?' in WHERE clause for vec0 tables
+        const query = `
+            SELECT 
+                s.id, 
+                s.content, 
+                s.type, 
+                s.timestamp,
+                s.x,
+                s.y,
+                v.distance
+            FROM vec_snippets v
+            JOIN snippets s ON s.id = v.id
+            WHERE embedding MATCH ? AND k = ?
+            ORDER BY distance
+        `;
 
-    const results = await database.execute(query, [queryEmbedding, limit]);
+        const results = await database.execute(query, [queryEmbedding, limit]);
 
-    const elapsed = Date.now() - startTime;
-    console.log(`[DB] Native Vector Search completed in ${elapsed}ms`);
+        const elapsed = Date.now() - startTime;
+        console.log(`[DB] Native Vector Search completed in ${elapsed}ms`);
 
-    return (results.rows as unknown as Snippet[]) || [];
+        return (results.rows as unknown as Snippet[]) || [];
+    } catch (error) {
+        console.warn('[DB] findSimilarSnippets failed (DB likely not ready):', error);
+        return [];
+    }
 }
 
 /**
  * Get all snippets
  */
 export async function getAllSnippets(): Promise<Snippet[]> {
-    const database = getDb();
-    const results = await database.execute('SELECT * FROM snippets ORDER BY timestamp DESC');
-    return (results.rows as unknown as Snippet[]) || [];
+    try {
+        const database = getDb();
+        const results = await database.execute('SELECT * FROM snippets ORDER BY timestamp DESC');
+        return (results.rows as unknown as Snippet[]) || [];
+    } catch (error) {
+        console.warn('[DB] getAllSnippets failed - returning empty list:', error);
+        return [];
+    }
 }
 
 /**
@@ -179,23 +194,28 @@ export async function getAllSnippets(): Promise<Snippet[]> {
  * Uses JOIN with native vector table
  */
 export async function getAllSnippetsWithEmbeddings(): Promise<Snippet[]> {
-    const database = getDb();
-    const query = `
-        SELECT 
-            s.*,
-            v.embedding
-        FROM snippets s
-        JOIN vec_snippets v ON s.id = v.id
-        ORDER BY s.timestamp DESC
-    `;
-    const results = await database.execute(query);
+    try {
+        const database = getDb();
+        const query = `
+            SELECT 
+                s.*,
+                v.embedding
+            FROM snippets s
+            JOIN vec_snippets v ON s.id = v.id
+            ORDER BY s.timestamp DESC
+        `;
+        const results = await database.execute(query);
 
-    // Rows returned by op-sqlite are objects, we need to ensure embedding is Float32Array
-    const rows = results.rows || [];
-    return rows.map(row => ({
-        ...row,
-        embedding: row.embedding ? new Float32Array(row.embedding as ArrayBuffer) : undefined
-    })) as unknown as Snippet[];
+        // Rows returned by op-sqlite are objects, we need to ensure embedding is Float32Array
+        const rows = results.rows || [];
+        return rows.map(row => ({
+            ...row,
+            embedding: row.embedding ? new Float32Array(row.embedding as ArrayBuffer) : undefined
+        })) as unknown as Snippet[];
+    } catch (error) {
+        console.warn('[DB] getAllSnippetsWithEmbeddings failed:', error);
+        return [];
+    }
 }
 
 /**
