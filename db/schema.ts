@@ -16,6 +16,10 @@ export interface Snippet {
   embedding?: Float32Array;
   x: number;
   y: number;
+  z: number;
+  importance: number;
+  connection_count: number;
+  last_accessed: number | null;
 }
 
 /**
@@ -32,9 +36,15 @@ export const SCHEMA = {
       topic TEXT DEFAULT 'misc',
       timestamp INTEGER NOT NULL,
       x REAL DEFAULT 0,
-      y REAL DEFAULT 0
+      y REAL DEFAULT 0,
+      z REAL DEFAULT 0,
+      importance REAL DEFAULT 1.0,
+      connection_count INTEGER DEFAULT 0,
+      last_accessed INTEGER,
+      cluster_id INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_snippets_type ON snippets(type);
+    CREATE INDEX IF NOT EXISTS idx_snippets_cluster ON snippets(cluster_id);
   `,
   // Tier 1: Fast Vector Shadow Table (384-dim for real-time)
   vectorTableFast: `
@@ -44,7 +54,7 @@ export const SCHEMA = {
     );
   `,
 
-  // Tier 2: Rich Vector Shadow Table (1536-dim for deep context) - Already exists
+  // Tier 2: Rich Vector Shadow Table (1536-dim for deep context)
   vectorTableRich: `
     CREATE VIRTUAL TABLE IF NOT EXISTS vec_snippets USING vec0(
       id INTEGER PRIMARY KEY,
@@ -52,25 +62,68 @@ export const SCHEMA = {
     );
   `,
 
-  // Semantic Clusters
-  clusters: `
-    CREATE TABLE IF NOT EXISTS clusters (
+  // Pre-computed Semantic Edges
+  semanticEdges: `
+    CREATE TABLE IF NOT EXISTS semantic_edges (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
-      label TEXT,
+      source_id INTEGER NOT NULL,
+      target_id INTEGER NOT NULL,
+      weight REAL NOT NULL,
       created_at INTEGER NOT NULL,
-      updated_at INTEGER NOT NULL,
-      node_count INTEGER DEFAULT 0
+      FOREIGN KEY(source_id) REFERENCES snippets(id) ON DELETE CASCADE,
+      FOREIGN KEY(target_id) REFERENCES snippets(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_edges_source ON semantic_edges(source_id);
+    CREATE INDEX IF NOT EXISTS idx_edges_target ON semantic_edges(target_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_edges_unique ON semantic_edges(source_id, target_id);
+  `,
+
+  // Cluster Centroids (Pre-computed)
+  clusterCentroids: `
+    CREATE TABLE IF NOT EXISTS cluster_centroids (
+      cluster_id INTEGER PRIMARY KEY,
+      x REAL NOT NULL,
+      y REAL NOT NULL,
+      z REAL NOT NULL,
+      node_count INTEGER NOT NULL,
+      last_updated INTEGER NOT NULL
+    );
+  `,
+
+  // MCP: External Resources
+  externalResources: `
+    CREATE TABLE IF NOT EXISTS external_resources (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      server_id TEXT NOT NULL,
+      uri TEXT NOT NULL,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      metadata TEXT,
+      embedding BLOB,
+      x REAL DEFAULT 0,
+      y REAL DEFAULT 0,
+      z REAL DEFAULT 0,
+      created_at INTEGER NOT NULL
+    );
+  `,
+
+  // MCP: Resource Links
+  resourceLinks: `
+    CREATE TABLE IF NOT EXISTS resource_links (
+      snippet_id INTEGER,
+      resource_id INTEGER,
+      relationship_type TEXT,
+      FOREIGN KEY(snippet_id) REFERENCES snippets(id),
+      FOREIGN KEY(resource_id) REFERENCES external_resources(id)
     );
   `,
 
   // Migrations for schema evolution
   migrations: [
-    `ALTER TABLE snippets ADD COLUMN x REAL DEFAULT 0;`,
-    `ALTER TABLE snippets ADD COLUMN y REAL DEFAULT 0;`,
-    `ALTER TABLE snippets ADD COLUMN sentiment TEXT DEFAULT 'neutral';`,
-    `ALTER TABLE snippets ADD COLUMN topic TEXT DEFAULT 'misc';`,
-    `ALTER TABLE snippets ADD COLUMN cluster_id INTEGER;`,
-    `CREATE INDEX IF NOT EXISTS idx_snippets_cluster ON snippets(cluster_id);`
+    `ALTER TABLE snippets ADD COLUMN z REAL DEFAULT 0;`,
+    `ALTER TABLE snippets ADD COLUMN importance REAL DEFAULT 1.0;`,
+    `ALTER TABLE snippets ADD COLUMN connection_count INTEGER DEFAULT 0;`,
+    `ALTER TABLE snippets ADD COLUMN last_accessed INTEGER;`
   ]
 };
 

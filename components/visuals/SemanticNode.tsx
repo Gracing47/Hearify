@@ -1,10 +1,19 @@
+/**
+ * 🌟 SEMANTIC NODE 2.0 — AWARD-WINNING EDITION
+ * ─────────────────────────────────────────────
+ * Features:
+ * - Glowing Energy Orbs with dynamic color
+ * - Pulsing animation based on importance
+ * - Focus ring on selection
+ * - Type-based neon colors
+ */
+
 import {
-    BlurMask,
+    Blur,
     Circle,
     Group,
-    Paint,
-    Shader,
-    vec
+    Shadow,
+    Text as SkiaText
 } from '@shopify/react-native-skia';
 import React from 'react';
 import {
@@ -17,100 +26,124 @@ import {
 interface SemanticNodeProps {
     x: SharedValue<number>;
     y: SharedValue<number>;
-    color: string;
-    label: string;
-    zoomLevel: SharedValue<number>; // Global Zoom State from GestureHandler
-    font: any; // Skia Font Object
-    selected?: boolean;
-    shader: any; // Skia Runtime Effect
+    z: SharedValue<number>;
+    type: 'fact' | 'feeling' | 'goal';
+    content: string;
+    importance: SharedValue<number>;
     time: SharedValue<number>;
-    active: SharedValue<number>;
-    colorVec: number[];
-    blur?: SharedValue<number>;
+    zoomLevel: SharedValue<number>;
+    isFocused: boolean;
+    isFiltered: boolean;
+    font: any;
 }
 
-export const SemanticNode = ({ x, y, color, label, zoomLevel, font, selected, shader, time, active, colorVec, blur }: SemanticNodeProps) => {
+// 🎨 Type-based neon colors
+const TYPE_COLORS = {
+    fact: { core: '#22d3ee', glow: 'rgba(34, 211, 238, 0.6)' },      // Cyan
+    feeling: { core: '#e879f9', glow: 'rgba(232, 121, 249, 0.6)' },  // Magenta
+    goal: { core: '#fde047', glow: 'rgba(253, 224, 71, 0.6)' },      // Gold
+};
 
-    // --- LOD LOGIC (UI Thread Calculations) ---
-    // ... (rest is same)
+export const SemanticNode = ({
+    x, y, z, type, content, importance, time, zoomLevel, isFocused, isFiltered, font
+}: SemanticNodeProps) => {
+    const colors = TYPE_COLORS[type] || TYPE_COLORS.fact;
 
-    // 1. Dynamic Size: Nodes shrink slightly when zooming in to make space for text
-    const orbRadius = useDerivedValue(() => {
-        return interpolate(zoomLevel.value, [0.5, 2.0], [12, 18], Extrapolate.CLAMP);
+    // Truncate content for label
+    const label = content.length > 25 ? content.substring(0, 22) + '...' : content;
+
+    // 🔥 Distance-based scaling and blur (DoF)
+    const distanceFactor = useDerivedValue(() => {
+        // Perspective factor: nodes at -500 are smaller
+        return 1 / (1 + Math.abs(z.value) / 1000);
     });
 
-    // 2. Label Visibility: Fades in between 2.5x and 3.5x zoom (Deep Zoom)
-    const labelOpacity = useDerivedValue(() => {
-        return interpolate(
-            zoomLevel.value,
-            [2.5, 3.5],
-            [0, 1], // 0 to 1 for Skia Paint
-            Extrapolate.CLAMP
-        );
+    const distanceBlur = useDerivedValue(() => {
+        return Math.min(Math.abs(z.value) / 150, 10);
     });
 
-    // 3. Focus Glow: Only visible when very close (Deep Inspection)
-    const glowOpacity = useDerivedValue(() => {
-        if (selected) return 1;
-        return interpolate(
-            zoomLevel.value,
-            [1.5, 2.5],
-            [0, 1],
-            Extrapolate.CLAMP
-        );
+    // Dynamic radius based on importance (1.0 - 2.0 range)
+    const baseRadius = useDerivedValue(() => {
+        const imp = importance.value;
+        const importanceScale = 8 + (imp - 1) * 8; // 8 to 16px based on importance
+        return importanceScale * distanceFactor.value;
     });
 
-    // Shader Uniforms
-    const uniforms = useDerivedValue(() => {
-        // Convert hex color string to RGB vec3? 
-        // Skia Shader expects vec3 or vec4 for color. 
-        // We might need to pass color as [r,g,b] array or let shader handle it?
-        // Let's assume color is passed as string, but shader needs vec3.
-        // We can use a simple color conversion or pass a parsed color prop.
-        // For simplicity, let's pass a dummy white color and handle tint in shader if possible?
-        // No, shader needs actual color.
-        // Let's try passing the Skia Color directly if possible?
-        // Actually, let's use the color prop directly in Circle color and use shader for effect?
-        // No, shader replaces color.
-
-        // Let's pass the color as vec3. But 'color' prop is string.
-        // We need a helper to hex to vec3. 
-        // Or we pass the color components from NeuralCanvas.
-
-        return {
-            u_time: time.value,
-            u_center: vec(x.value, y.value),
-            u_radius: orbRadius.value,
-            u_color: colorVec,
-            u_intensity: 1.0,
-            u_active: active.value
-        };
+    // Breathing pulse
+    const pulseRadius = useDerivedValue(() => {
+        const imp = importance.value;
+        const pulse = 1 + Math.sin(time.value * 2 + (imp * 10)) * 0.08;
+        return baseRadius.value * pulse;
     });
 
-    // Hex to Vec3 Helper (Basic approximation or separate util)
-    // Since we can't easily parse hex in worklet without helpers, 
-    // let's rely on NeuralCanvas passing numeric colors if needed.
-    // BUT 'color' prop is string.
+    const nodeOpacity = useDerivedValue(() => {
+        const base = isFiltered ? 0.05 : 0.8;
+        const focus = (isFocused) ? 1.0 : (base * distanceFactor.value);
+        return focus;
+    });
 
-    // Re-check: semanticNode receives 'color' (string).
+    const focusRingOpacity = useDerivedValue(() => {
+        if (!isFocused) return 0;
+        return 0.5 + Math.sin(time.value * 5) * 0.5;
+    });
+
+    // 🔥 Text Visibility: Only show when zoom > 1.8 and node is near
+    const textOpacity = useDerivedValue(() => {
+        const zoomFade = interpolate(zoomLevel.value, [1.5, 2.5], [0, 1], Extrapolate.CLAMP);
+        const depthFade = interpolate(Math.abs(z.value), [0, 400], [1, 0], Extrapolate.CLAMP);
+        return zoomFade * depthFade;
+    });
+
+    const textBlur = useDerivedValue(() => {
+        return interpolate(zoomLevel.value, [1.5, 2.5], [10, 0], Extrapolate.CLAMP);
+    });
 
     return (
-        <Group>
-            {/* LAYER 1: Organic Bloom Orb */}
-            <Circle cx={x} cy={y} r={orbRadius}>
-                <Shader source={shader} uniforms={uniforms} />
-                {blur && <BlurMask blur={blur} style="normal" />}
+        <Group opacity={nodeOpacity}>
+            {/* Outer Glow */}
+            <Circle cx={x} cy={y} r={useDerivedValue(() => pulseRadius.value * 2.2)} color={colors.glow}>
+                <Blur blur={useDerivedValue(() => 12 + distanceBlur.value)} />
             </Circle>
 
-            {/* LAYER 2: The Label (Context) - Now truncated and subtle */}
+            {/* Core */}
+            <Circle cx={x} cy={y} r={pulseRadius} color={colors.core}>
+                <Shadow dx={0} dy={0} blur={useDerivedValue(() => 10 + distanceBlur.value)} color={colors.core} />
+                <Blur blur={distanceBlur} />
+            </Circle>
 
+            {/* Inner Highlight */}
+            <Circle
+                cx={useDerivedValue(() => x.value - pulseRadius.value * 0.3)}
+                cy={useDerivedValue(() => y.value - pulseRadius.value * 0.3)}
+                r={useDerivedValue(() => pulseRadius.value * 0.3)}
+                color="rgba(255, 255, 255, 0.5)"
+            >
+                <Blur blur={2} />
+            </Circle>
 
-            {/* LAYER 3: Interaction Glow (High Detail) */}
-            <Group>
-                <Paint opacity={glowOpacity} style="stroke" strokeWidth={2} color="white" />
-                <Circle cx={x} cy={y} r={useDerivedValue(() => orbRadius.value + 4)}>
-                    <BlurMask blur={4} style="normal" />
-                </Circle>
+            {/* Focus Ring */}
+            <Group opacity={focusRingOpacity}>
+                <Circle
+                    cx={x}
+                    cy={y}
+                    r={useDerivedValue(() => pulseRadius.value + 6)}
+                    style="stroke"
+                    strokeWidth={2}
+                    color="white"
+                />
+            </Group>
+
+            {/* 🔥 Progressive Text Reveal */}
+            <Group opacity={textOpacity}>
+                <SkiaText
+                    x={useDerivedValue(() => x.value + pulseRadius.value + 8)}
+                    y={useDerivedValue(() => y.value + 4)}
+                    text={label}
+                    font={font}
+                    color="white"
+                >
+                    <Blur blur={textBlur} />
+                </SkiaText>
             </Group>
         </Group>
     );

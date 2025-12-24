@@ -48,17 +48,17 @@ export default function RootLayout() {
     if (!currentProfile) {
       // No profile exists, go to onboarding
       if (!inOnboarding) {
-        router.replace('/onboarding');
+        router.replace('/onboarding' as any);
       }
     } else if (!currentProfile.isOnboarded) {
       // Profile exists but onboarding not complete
       if (!inOnboarding) {
-        router.replace('/onboarding');
+        router.replace('/onboarding' as any);
       }
     } else {
       // Profile is ready, go to main app
       if (inOnboarding) {
-        router.replace('/(tabs)');
+        router.replace('/(tabs)' as any);
       }
     }
   }, [currentProfile, isLoading, isDbReady, segments]);
@@ -77,7 +77,6 @@ export default function RootLayout() {
       <Stack>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="onboarding" options={{ headerShown: false }} />
-        <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
       </Stack>
       <StatusBar style="auto" />
     </ThemeProvider>

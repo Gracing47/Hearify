@@ -1,5 +1,5 @@
 import * as Haptics from 'expo-haptics';
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Dimensions, StyleSheet, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
@@ -15,6 +15,7 @@ import Animated, {
 import { HorizonScreen } from '@/components/screens/HorizonScreen';
 import { MemoryScreen } from '@/components/screens/MemoryScreen';
 import { OrbitScreen } from '@/components/screens/OrbitScreen';
+import { useContextStore } from '@/store/contextStore';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -27,9 +28,21 @@ const SPRING_CONFIG = {
 };
 
 export const MindLayout = () => {
-    // 0 = Orbit, -Height = Horizon, +Height = Memory
+    // 0 = Orbit, -SCREEN_HEIGHT = Horizon, SCREEN_HEIGHT = Memory
     const translateY = useSharedValue(0);
     const contextY = useSharedValue(0);
+
+    const activeScreen = useContextStore(state => state.activeScreen);
+
+    // Sync state to translateY
+    useEffect(() => {
+        let target = 0;
+        if (activeScreen === 'horizon') target = SCREEN_HEIGHT;
+        else if (activeScreen === 'memory') target = -SCREEN_HEIGHT;
+        else target = 0;
+
+        translateY.value = withSpring(target, SPRING_CONFIG);
+    }, [activeScreen]);
 
     // Coordination checks
     const isMemoryAtTop = useSharedValue(true);
@@ -40,6 +53,11 @@ export const MindLayout = () => {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     };
 
+    // Helper for runOnJS (must be a stable reference)
+    const updateActiveScreen = (screen: 'orbit' | 'horizon' | 'memory') => {
+        useContextStore.getState().setActiveScreen(screen);
+    };
+
     const panGesture = Gesture.Pan()
         .simultaneousWithExternalGesture(memoryScrollRef)
         .onStart(() => {
@@ -48,32 +66,23 @@ export const MindLayout = () => {
         .onUpdate((e) => {
             let nextY = contextY.value + e.translationY * 0.8;
 
-            // --- SCROLL LOCK LOGIC ---
-            // If we are currently at the Memory Screen (bottom, so translateY is approx -SCREEN_HEIGHT)
-            // And the user is pulling DOWN (e.translationY > 0) to verify scroll content?
-            // Wait: 
-            // - Pulling DOWN (positive) moves content DOWN. This is scrolling TOP. 
-            // - If at top, we want to move screen (return to Orbit).
-            // - If NOT at top, we want to scroll content (Screen should stay locked at -SCREEN_HEIGHT).
-
-            // Check if we are in Memory Zone
+            // Check if we are in Memory Zone (bottom, nextY < 0?)
+            // Wait, in this layout: 
+            // Orbit at 0
+            // Horizon at SCREEN_HEIGHT (top of container is moved DOWN)
+            // Memory at -SCREEN_HEIGHT (top of container is moved UP)
             if (contextY.value <= -SCREEN_HEIGHT * 0.9) {
                 const tryingToScrollContentUp = e.translationY > 0; // Swipe Down
                 const tryingToScrollContentDown = e.translationY < 0; // Swipe Up
 
                 if (tryingToScrollContentUp && !isMemoryAtTop.value) {
-                    // We are scrolling up, but not at top yet.
-                    // The screen position should NOT change. Lock it.
                     nextY = -SCREEN_HEIGHT;
                 }
-
-                // If dragging up (scrolling down), screen stays at max (can't go further up)
                 if (tryingToScrollContentDown) {
                     nextY = -SCREEN_HEIGHT;
                 }
             }
 
-            // Normal Update
             translateY.value = nextY;
         })
         .onEnd((e) => {
@@ -81,44 +90,41 @@ export const MindLayout = () => {
             const position = translateY.value;
             const halfHeight = SCREEN_HEIGHT * 0.25;
 
-            let target = 0;
+            let target: 'orbit' | 'horizon' | 'memory' = 'orbit';
 
             // 1. Determine nearest snap point based on position
             if (position < -halfHeight) {
-                target = -SCREEN_HEIGHT; // Snap to Memory
+                target = 'memory';
             } else if (position > halfHeight) {
-                target = SCREEN_HEIGHT; // Snap to Horizon
+                target = 'horizon';
             } else {
-                target = 0; // Snap to Orbit
+                target = 'orbit';
             }
 
             // 2. Allow "Fling" to override position (Velocity Check)
-            // If dragging significantly against the current target, switch target.
             if (velocity < -500) {
                 // Fling UP -> Go closer to Memory (-H)
-                if (target === SCREEN_HEIGHT) target = 0;
-                else if (target === 0) target = -SCREEN_HEIGHT;
+                if (target === 'horizon') target = 'orbit';
+                else if (target === 'orbit') target = 'memory';
             } else if (velocity > 500) {
                 // Fling DOWN -> Go closer to Horizon (+H)
-                if (target === -SCREEN_HEIGHT) target = 0;
-                else if (target === 0) target = SCREEN_HEIGHT;
+                if (target === 'memory') target = 'orbit';
+                else if (target === 'orbit') target = 'horizon';
             }
 
-            translateY.value = withSpring(target, SPRING_CONFIG);
+            runOnJS(updateActiveScreen)(target);
 
-            if (target !== 0) {
+            if (target !== 'orbit') {
                 runOnJS(triggerHaptic)();
             }
         });
 
     // --- ANIMATIONS ---
 
-    // 1. Main Container Movement
     const containerStyle = useAnimatedStyle(() => ({
         transform: [{ translateY: translateY.value }],
     }));
 
-    // 2. Parallax Effect for the Center Screen (Orbit)
     const orbitStyle = useAnimatedStyle(() => ({
         opacity: interpolate(
             translateY.value,

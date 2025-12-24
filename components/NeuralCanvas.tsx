@@ -41,9 +41,9 @@ import Animated, {
     useSharedValue
 } from 'react-native-reanimated';
 
-import { getAllClusters, getAllSnippetsWithFastEmbeddings } from '../db';
+import { getSemanticGraph, loadNodesIncremental } from '../db';
 import { Snippet } from '../db/schema';
-import { IntelligenceService } from '../services/intelligence';
+import { useContextStore } from '../store/contextStore';
 import { FilmGrainOverlay } from './visuals/FilmGrain';
 import { SemanticNode } from './visuals/SemanticNode';
 
@@ -70,8 +70,7 @@ const getClusterColor = (id: number): number[] => {
     return CLUSTER_COLORS[id % CLUSTER_COLORS.length];
 };
 
-// 🎨 ENHANCED: Node Shader mit Temporal Tinting
-// 🎨 ENHANCED: Node Shader mit "Organic Bloom" & Sentiment Neon
+// 🎨 Node Shader: Organic Bloom & Neon Glow
 const nodeShader = Skia.RuntimeEffect.Make(`
   uniform float u_time;
   uniform vec2 u_center;
@@ -114,7 +113,7 @@ const nodeShader = Skia.RuntimeEffect.Make(`
   }
 `)!;
 
-// 🌊 ENHANCED: Background mit stärkerer Cluster-Visualisierung
+// 🌊 ENHANCED: Deep Space Nebula Background
 const backgroundShader = Skia.RuntimeEffect.Make(`
   uniform float u_time;
   uniform vec2 u_res;
@@ -131,40 +130,42 @@ const backgroundShader = Skia.RuntimeEffect.Make(`
     vec2 i = floor(p * density);
     vec2 f = fract(p * density);
     float h = hash(i);
-    if (h < 0.98) return 0.0;
-    float pulse = 0.5 + 0.5 * sin(u_time * 2.0 + h * 10.0);
-    return smoothstep(0.9, 1.0, 1.0 - length(f - 0.5)) * pulse;
+    if (h < 0.985) return 0.0;
+    float pulse = 0.4 + 0.6 * sin(u_time * 0.8 + h * 20.0);
+    return smoothstep(0.8, 1.0, 1.0 - length(f - 0.5)) * pulse;
   }
 
   half4 main(vec2 pos) {
     vec2 uv = pos / u_res;
     vec2 p = (pos - u_res * 0.5) / u_scale + u_offset;
     
-    float stars1 = star(p, 0.05);
-    float stars2 = star(p * 2.0, 0.03);
-    float stars3 = star(p * 0.5, 0.1);
+    // Parallax Star Fields
+    float s1 = star(p, 0.04);
+    float s2 = star(p * 1.5, 0.02);
+    float s3 = star(p * 0.6, 0.08);
 
-    float distToCore = length(p);
-    float coreGlow = 0.2 / (1.0 + distToCore * 0.002);
+    // Deep Nebula Clouds
+    float n1 = sin(p.x * 0.002 + u_time * 0.1) * cos(p.y * 0.002 - u_time * 0.05);
+    float n2 = sin(p.y * 0.003 - u_time * 0.08) * cos(p.x * 0.004 + u_time * 0.12);
+    vec3 nebulaColor = vec3(0.05, 0.04, 0.15) * (n1 + n2 + 1.0);
     
+    // Core Glow
     float distToAvg = length(p - u_avgPos);
-    float auraGlow = (u_energy * 0.08) / (1.0 + distToAvg * 0.004);
-    vec3 auraColor = vec3(0.35, 0.45, 0.95) * auraGlow;
+    float auraGlow = (u_energy * 0.1) / (1.0 + distToAvg * 0.005);
+    vec3 auraColor = vec3(0.2, 0.3, 0.8) * auraGlow;
     
-    vec3 color1 = vec3(0.008, 0.008, 0.025);
-    vec3 color2 = vec3(0.0, 0.0, 0.0);    
-    vec3 nebula = vec3(0.05, 0.05, 0.15) * stars2;
+    // Background Gradient (Deep Navy to Black)
+    vec3 baseColor = mix(vec3(0.005, 0.005, 0.015), vec3(0.0), uv.y);
     
-    vec3 finalColor = mix(color1, color2, uv.y);
-    finalColor += stars1 * 0.5 + stars3 * 0.25 + nebula + auraColor + (vec3(0.5, 0.5, 1.0) * coreGlow);
+    vec3 finalColor = baseColor + (s1 * 0.6 + s2 * 0.4 + s3 * 0.2) + nebulaColor * 0.3 + auraColor;
     
-    float vignette = 1.0 - length(uv - 0.5) * 0.7;
+    // Subtle Vignette
+    float vignette = 1.0 - length(uv - 0.5) * 0.6;
     return half4(finalColor * vignette, 1.0);
   }
 `)!;
 
-// 🔥 ENHANCED: Edge Shader mit dynamischer Dicke
-// 🔥 ENHANCED: Edge Shader mit Traveler Particles
+// 🔥 Edge Shader: Dynamic Traveler Particles
 const edgeShader = Skia.RuntimeEffect.Make(`
   uniform float u_time;
   uniform vec2 u_p1;
@@ -194,7 +195,7 @@ const edgeShader = Skia.RuntimeEffect.Make(`
     float particle = smoothstep(30.0, 0.0, particleDist); // 30px trail
     
     // Particle glow
-    vec3 particleColor = u_color * 2.0;
+    vec3 particleColor = mix(u_color, vec3(1.0, 1.0, 1.0), 0.7) * 2.5;
     float particleAlpha = particle * smoothstep(2.0, 0.0, dist) * 0.8;
     
     vec3 finalColor = u_color * alpha + particleColor * particleAlpha;
@@ -204,7 +205,7 @@ const edgeShader = Skia.RuntimeEffect.Make(`
   }
 `)!;
 
-// 🌟 NEU: Cluster Aura Shader (Farbige Nebelzonen)
+// 🌟 ENHANCED: Volumetric Cluster Aura
 const clusterAuraShader = Skia.RuntimeEffect.Make(`
   uniform vec2 u_center;
   uniform float u_radius;
@@ -216,52 +217,22 @@ const clusterAuraShader = Skia.RuntimeEffect.Make(`
     vec2 toCenter = pos - u_center;
     float d = length(toCenter);
     
-    // Organischer Puls
-    float pulse = 0.9 + 0.1 * sin(u_time * 1.5);
-    float effectiveRadius = u_radius * pulse;
+    // Volumetric density falloff
+    float falloff = exp(-d * 4.0 / u_radius);
     
-    // Weicher Falloff
-    float falloff = smoothstep(effectiveRadius, effectiveRadius * 0.3, d);
-    
-    // Rotierender Nebel-Effekt
+    // Organic turbulence
     float angle = atan(toCenter.y, toCenter.x);
-    float noise = sin(angle * 3.0 + u_time) * 0.15 + 0.85;
+    float turbulence = sin(angle * 4.0 + u_time * 0.5) * 0.2 + 0.8;
+    float swell = 1.0 + 0.1 * sin(u_time * 0.8 + d * 0.01);
     
-    float finalAlpha = falloff * u_intensity * noise * 0.18;
+    float finalAlpha = falloff * u_intensity * turbulence * swell * 0.25;
+    
+    // Edge softening
+    finalAlpha *= smoothstep(u_radius, u_radius * 0.5, d);
     
     return half4(u_color * finalAlpha, finalAlpha);
   }
 `)!;
-
-const getSentimentAura = (sentiment?: string): number[] => {
-    switch (sentiment) {
-        case 'analytical': return [0.3, 0.5, 1.0];
-        case 'positive': return [1.0, 0.85, 0.2];
-        case 'creative': return [0.4, 0.3, 0.9];
-        default: return [0.4, 0.4, 0.5];
-    }
-};
-
-const getNodeColorVec = (type: string): number[] => {
-    switch (type) {
-        case 'goal': return [0.99, 0.88, 0.22]; // Yellow
-        case 'feeling': return [0.91, 0.25, 0.98]; // Purple
-        case 'fact': return [0.13, 0.83, 0.93]; // Cyan
-        default: return [0.8, 0.8, 0.8];
-    }
-};
-
-const cosineSimilarity = (a: Float32Array, b: Float32Array) => {
-    let dotProduct = 0;
-    let mA = 0;
-    let mB = 0;
-    for (let i = 0; i < a.length; i++) {
-        dotProduct += a[i] * b[i];
-        mA += a[i] * a[i];
-        mB += b[i] * b[i];
-    }
-    return dotProduct / (Math.sqrt(mA) * Math.sqrt(mB));
-};
 
 interface NeuralCanvasProps {
     filterType?: 'all' | 'fact' | 'feeling' | 'goal';
@@ -269,6 +240,7 @@ interface NeuralCanvasProps {
 
 export function NeuralCanvas({ filterType = 'all' }: NeuralCanvasProps) {
     const [nodes, setNodes] = useState<Snippet[]>([]);
+    const [isLoading, setIsLoading] = useState(true);
     const [selectedNode, setSelectedNode] = useState<Snippet | null>(null);
     const [focusedNodeId, setFocusedNodeId] = useState<number | null>(null);
 
@@ -278,145 +250,80 @@ export function NeuralCanvas({ filterType = 'all' }: NeuralCanvasProps) {
     const scale = useSharedValue(1);
     const time = useSharedValue(0);
 
-    const boundsMinX = useSharedValue(-200);
-    const boundsMaxX = useSharedValue(200);
-    const boundsMinY = useSharedValue(-200);
-    const boundsMaxY = useSharedValue(200);
-
+    // Physics State
     const nodePositionsX = useSharedValue<number[]>([]);
     const nodePositionsY = useSharedValue<number[]>([]);
     const nodePositionsZ = useSharedValue<number[]>([]);
-    const nodeTargetZ = useSharedValue<number[]>([]);
-    const nodeKnnIndices = useSharedValue<number[]>([]);
     const nodeVelocitiesX = useSharedValue<number[]>([]);
     const nodeVelocitiesY = useSharedValue<number[]>([]);
     const nodeVelocitiesZ = useSharedValue<number[]>([]);
     const nodeClusterIds = useSharedValue<number[]>([]);
-    const similarityMatrix = useSharedValue<number[]>([]);
+    const nodeImportance = useSharedValue<number[]>([]);
+
+    // Cluster State
     const clusterCentersX = useSharedValue<number[]>([]);
     const clusterCentersY = useSharedValue<number[]>([]);
     const clusterCentersZ = useSharedValue<number[]>([]);
     const [clusters, setClusters] = useState<Cluster[]>([]);
     const [insights, setInsights] = useState<any[]>([]);
 
-    // 🔥 NEU: Node Importance Tracking
-    const nodeImportance = useSharedValue<number[]>([]);
-    const nodeLastAccessed = useSharedValue<number[]>([]);
-
     const [edgePairs, setEdgePairs] = useState<[number, number][]>([]);
+
+    const [loadingPhase, setLoadingPhase] = useState<'clusters' | 'recent' | 'complete'>('clusters');
 
     useEffect(() => {
         const load = async () => {
             const startLoad = Date.now();
-            const snippets = await getAllSnippetsWithFastEmbeddings();
-            if (snippets.length === 0) return;
 
+            // 🔥 PHASE 1: Clusters (Instant)
+            const dbClusters = await loadNodesIncremental('clusters');
+            setClusters(dbClusters);
+            setLoadingPhase('clusters');
+
+            // 🔥 PHASE 2: Recent & Important
+            setTimeout(async () => {
+                const { nodes: recentNodes, edges: initialEdges } = await getSemanticGraph();
+                const filteredRecent = recentNodes.filter(n =>
+                    (Date.now() - n.timestamp) < 14 * 24 * 60 * 60 * 1000 || n.importance >= 1.5
+                ).slice(0, 100);
+
+                applyNodes(filteredRecent);
+                setEdgePairs(initialEdges.map(e => [e.source, e.target]));
+                setNodes(filteredRecent);
+                setLoadingPhase('recent');
+                setIsLoading(false);
+
+                // 🔥 PHASE 3: Full Archive
+                setTimeout(async () => {
+                    const { nodes: allNodes } = await getSemanticGraph();
+                    applyNodes(allNodes);
+                    setNodes(allNodes);
+                    setLoadingPhase('complete');
+                    console.log(`[NeuralCanvas] Full load: ${allNodes.length} nodes in ${Date.now() - startLoad}ms`);
+                }, 500);
+            }, 200);
+        };
+
+        const applyNodes = (snippets: Snippet[]) => {
             const n = snippets.length;
             const initialX = snippets.map(s => (s.x && s.x !== 0) ? s.x : (Math.random() - 0.5) * 1200);
             const initialY = snippets.map(s => (s.y && s.y !== 0) ? s.y : (Math.random() - 0.5) * 1200);
-
-            const now = Date.now();
-            const dayInMs = 24 * 60 * 60 * 1000;
-            const initialZ = snippets.map(s => {
-                const ageDays = (now - s.timestamp) / dayInMs;
-                return -Math.min(ageDays * 20, 1000);
-            });
-
-            const dbClusters = await getAllClusters();
-            setClusters(dbClusters);
+            const initialZ = snippets.map(s => s.z || 0);
 
             const clusterIds = snippets.map(s => s.cluster_id || -1);
-
-            const matrix = new Float32Array(n * n);
-            const edges: [number, number][] = [];
-
-            for (let i = 0; i < n; i++) {
-                const vecI = snippets[i].embedding;
-                if (!vecI) continue;
-
-                for (let j = i + 1; j < n; j++) {
-                    const vecJ = snippets[j].embedding;
-                    if (vecJ) {
-                        const sim = cosineSimilarity(vecI, vecJ);
-                        matrix[i * n + j] = sim;
-                        matrix[j * n + i] = sim;
-                        if (sim > 0.78) { // Leicht gesenkt für mehr Verbindungen
-                            edges.push([i, j]);
-                        }
-                    }
-                }
-            }
-
-            const k = 5;
-            const knnIndices = new Int32Array(n * k).fill(-1);
-            const importance = new Array(n).fill(0);
-
-            for (let i = 0; i < n; i++) {
-                const neighbors: { idx: number; sim: number }[] = [];
-                for (let j = 0; j < n; j++) {
-                    if (i === j) continue;
-                    const sim = matrix[i * n + j];
-                    if (sim > 0.5) {
-                        neighbors.push({ idx: j, sim });
-                    }
-                }
-
-                neighbors.sort((a, b) => b.sim - a.sim);
-
-                for (let m = 0; m < Math.min(k, neighbors.length); m++) {
-                    knnIndices[i * k + m] = neighbors[m].idx;
-                }
-
-                // 🔥 Calculate Importance (Connection Count + Type Weight + Recency)
-                const connectionCount = neighbors.length;
-                const recency = 1 - Math.abs(initialZ[i]) / 1000;
-                const typeWeight = snippets[i].type === 'goal' ? 1.5 :
-                    snippets[i].type === 'feeling' ? 1.2 : 1.0;
-
-                importance[i] = 0.6 + (connectionCount / 10) * 0.4 + recency * 0.5 + (typeWeight - 1) * 0.5;
-            }
-
-            console.log(`[NeuralCanvas] Calculations for ${n} nodes took ${Date.now() - startLoad}ms`);
+            const importance = snippets.map(s => s.importance || 1.0);
 
             nodePositionsX.value = initialX;
             nodePositionsY.value = initialY;
             nodePositionsZ.value = initialZ;
-            nodeTargetZ.value = initialZ;
-            nodeVelocitiesX.value = new Array(n).fill(0).map(() => (Math.random() - 0.5) * 40);
-            nodeVelocitiesY.value = new Array(n).fill(0).map(() => (Math.random() - 0.5) * 40);
+
+            nodeVelocitiesX.value = new Array(n).fill(0);
+            nodeVelocitiesY.value = new Array(n).fill(0);
             nodeVelocitiesZ.value = new Array(n).fill(0);
-            nodeKnnIndices.value = Array.from(knnIndices);
-            similarityMatrix.value = Array.from(matrix);
             nodeClusterIds.value = clusterIds;
             nodeImportance.value = importance;
-            nodeLastAccessed.value = snippets.map(s => s.timestamp);
-
-            setEdgePairs(edges);
-            setNodes(snippets);
-
-            const dbInsights = await IntelligenceService.detectInsights();
-            setInsights(dbInsights);
-
-            const minX = Math.min(...initialX);
-            const maxX = Math.max(...initialX);
-            const minY = Math.min(...initialY);
-            const maxY = Math.max(...initialY);
-            const paddingX = (maxX - minX) * 0.2 || 200;
-            const paddingY = (maxY - minY) * 0.2 || 200;
-
-            boundsMinX.value = minX - paddingX;
-            boundsMaxX.value = maxX + paddingX;
-            boundsMinY.value = minY - paddingY;
-            boundsMaxY.value = maxY + paddingY;
-
-            const contentWidth = maxX - minX + 50;
-            const contentHeight = maxY - minY + 50;
-            const fitScaleX = width / contentWidth;
-            const fitScaleY = height / contentHeight;
-            const initialScale = Math.min(Math.min(fitScaleX, fitScaleY) * 3.2, 5.0);
-
-            scale.value = Math.max(initialScale, 1.8);
         };
+
         load();
     }, []);
 
@@ -427,12 +334,13 @@ export function NeuralCanvas({ filterType = 'all' }: NeuralCanvasProps) {
         const n = nodePositionsX.value.length;
         if (n === 0) return;
 
-        const friction = 0.985;
-        const repulsionK = 1000;
-        const springK = 0.018; // Leicht erhöht
-        const clusterAttraction = 0.055; // 🔥 STARK erhöht (war 0.035)
-        const driftIntensity = 0.12;
-        const centerAttraction = 0.002;
+        const friction = 0.98;
+        const repulsionK = 1200;
+        const springK = 0.02;
+        const clusterAttraction = 0.06;
+        const orbitalStrength = 0.025; // 🔥 NEW: Orbital force
+        const driftIntensity = 0.15;
+        const centerAttraction = 0.003;
 
         const nextPosX = [...nodePositionsX.value];
         const nextPosY = [...nodePositionsY.value];
@@ -441,6 +349,7 @@ export function NeuralCanvas({ filterType = 'all' }: NeuralCanvasProps) {
         const nextVelY = [...nodeVelocitiesY.value];
         const nextVelZ = [...nodeVelocitiesZ.value];
 
+        // ... existing cluster center calculation code ...
         const cCX: { [key: number]: number } = {};
         const cCY: { [key: number]: number } = {};
         const cCZ: { [key: number]: number } = {};
@@ -479,81 +388,58 @@ export function NeuralCanvas({ filterType = 'all' }: NeuralCanvasProps) {
         clusterCentersY.value = finalCCY;
         clusterCentersZ.value = finalCCZ;
 
-        const k = 5;
         for (let i = 0; i < n; i++) {
             let fx = 0, fy = 0, fz = 0;
 
-            for (let m = 0; m < k; m++) {
-                const neighborIdx = nodeKnnIndices.value[i * k + m];
-                if (neighborIdx === -1 || neighborIdx === undefined) continue;
-
-                const dx = (nextPosX[neighborIdx] ?? 0) - (nextPosX[i] ?? 0);
-                const dy = (nextPosY[neighborIdx] ?? 0) - (nextPosY[i] ?? 0);
-                const dz = (nextPosZ[neighborIdx] ?? 0) - (nextPosZ[i] ?? 0);
-
-                const strength = springK * (1.3 - m / k);
-                fx += dx * strength;
-                fy += dy * strength;
-                fz += dz * strength;
-            }
-
+            // 1. Cluster Attraction & Orbit
             const myClusterId = nodeClusterIds.value[i] ?? -1;
             if (myClusterId !== -1 && finalCCX[myClusterId] !== undefined) {
-                fx += ((finalCCX[myClusterId] ?? 0) - (nextPosX[i] ?? 0)) * clusterAttraction;
-                fy += ((finalCCY[myClusterId] ?? 0) - (nextPosY[i] ?? 0)) * clusterAttraction;
-                fz += ((finalCCZ[myClusterId] ?? 0) - (nextPosZ[i] ?? 0)) * clusterAttraction;
+                const dx = (finalCCX[myClusterId] ?? 0) - (nextPosX[i] ?? 0);
+                const dy = (finalCCY[myClusterId] ?? 0) - (nextPosY[i] ?? 0);
+                const dz = (finalCCZ[myClusterId] ?? 0) - (nextPosZ[i] ?? 0);
+                const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+
+                // Pull towards center
+                fx += dx * clusterAttraction;
+                fy += dy * clusterAttraction;
+                fz += dz * 0.05; // Gentle snap to cluster depth
+
+                // 🔥 Orbital force: perpendicular to direction to center
+                fx += -dy * orbitalStrength;
+                fy += dx * orbitalStrength;
             }
 
+            // 2. Global Repulsion
             for (let j = 0; j < n; j++) {
                 if (i === j) continue;
-
                 const dx = (nextPosX[i] ?? 0) - (nextPosX[j] ?? 0);
                 const dy = (nextPosY[i] ?? 0) - (nextPosY[j] ?? 0);
-                const dz = (nextPosZ[i] ?? 0) - (nextPosZ[j] ?? 0);
-                const distSq = dx * dx + dy * dy + dz * dz || 0.1;
-                let dist = Math.sqrt(distSq);
-
-                const repelForce = repulsionK / (distSq + 50);
-
-                if (dist < 0.1) {
-                    fx += (Math.random() - 0.5) * 2.0;
-                    fy += (Math.random() - 0.5) * 2.0;
-                } else {
-                    fx += (dx / dist) * repelForce;
-                    fy += (dy / dist) * repelForce;
-                    fz += (dz / dist) * repelForce;
-                }
+                const distSq = dx * dx + dy * dy || 1;
+                const repel = repulsionK / (distSq + 200);
+                fx += (dx / Math.sqrt(distSq)) * repel;
+                fy += (dy / Math.sqrt(distSq)) * repel;
             }
 
+            // 3. Drift & Brownian Motion (The Spark of Life)
             fx += Math.sin(time.value * 0.7 + i) * driftIntensity;
             fy += Math.cos(time.value * 0.5 + i) * driftIntensity;
-            fz += Math.sin(time.value * 0.3 + i) * driftIntensity;
+            fz += Math.sin(time.value * 1.2 + i) * (driftIntensity * 50); // Move in depth
 
             fx -= (nextPosX[i] ?? 0) * centerAttraction;
             fy -= (nextPosY[i] ?? 0) * centerAttraction;
 
-            const targetZ = nodeTargetZ.value[i] ?? 0;
-            fz += (targetZ - (nextPosZ[i] ?? 0)) * 0.05;
+            // 4. Update Velocities & Positions
+            const vx = (nextVelX[i] + fx) * friction;
+            const vy = (nextVelY[i] + fy) * friction;
+            const vz = (nextVelZ[i] + fz) * friction;
 
-            if (isNaN(fx)) fx = 0;
-            if (isNaN(fy)) fy = 0;
-            if (isNaN(fz)) fz = 0;
+            nextVelX[i] = vx;
+            nextVelY[i] = vy;
+            nextVelZ[i] = vz;
 
-            const vx = ((nextVelX[i] ?? 0) + fx) * friction;
-            const vy = ((nextVelY[i] ?? 0) + fy) * friction;
-            const vz = ((nextVelZ[i] ?? 0) + fz) * friction;
-
-            nextVelX[i] = isNaN(vx) ? 0 : vx;
-            nextVelY[i] = isNaN(vy) ? 0 : vy;
-            nextVelZ[i] = isNaN(vz) ? 0 : vz;
-
-            const px = (nextPosX[i] ?? 0) + (nextVelX[i] ?? 0);
-            const py = (nextPosY[i] ?? 0) + (nextVelY[i] ?? 0);
-            const pz = (nextPosZ[i] ?? 0) + (nextVelZ[i] ?? 0);
-
-            nextPosX[i] = isNaN(px) ? (Math.random() - 0.5) * 100 : px;
-            nextPosY[i] = isNaN(py) ? (Math.random() - 0.5) * 100 : py;
-            nextPosZ[i] = isNaN(pz) ? (Math.random() - 0.5) * 100 : pz;
+            nextPosX[i] += vx;
+            nextPosY[i] += vy;
+            nextPosZ[i] += vz;
         }
 
         nodePositionsX.value = nextPosX;
@@ -597,17 +483,22 @@ export function NeuralCanvas({ filterType = 'all' }: NeuralCanvasProps) {
                 const hitRadius = 40 / scale.value + 20;
 
                 if (distance < hitRadius) {
-                    runOnJS(setSelectedNode)(nodes[i]);
-                    runOnJS(setFocusedNodeId)(nodes[i].id);
-
-                    // Update last accessed
-                    const newAccessed = [...nodeLastAccessed.value];
-                    newAccessed[i] = Date.now();
-                    nodeLastAccessed.value = newAccessed;
+                    runOnJS(handleNodeTap)(nodes[i]);
                     break;
                 }
             }
         });
+
+    const handleNodeTap = (node: Snippet) => {
+        setSelectedNode(node);
+        setFocusedNodeId(node.id);
+
+        // 🔥 Update global context
+        useContextStore.getState().setFocusNode(node.id);
+
+        // 🔥 Sync last accessed in DB (Optional/Async)
+        // initDatabase().then(db => db.execute('UPDATE snippets SET last_accessed = ? WHERE id = ?', [Date.now(), node.id]));
+    };
 
     const combined = Gesture.Simultaneous(panGesture, pinchGesture, tapGesture);
 
@@ -635,7 +526,7 @@ export function NeuralCanvas({ filterType = 'all' }: NeuralCanvasProps) {
             u_offset: [translateX.value, translateY.value],
             u_scale: scale.value,
             u_avgPos: [ax, ay],
-            u_energy: Math.min(n, 50)
+            u_energy: Math.min(n / 10, 2.0) // Normalize energy for shader
         };
     });
 
@@ -655,10 +546,18 @@ export function NeuralCanvas({ filterType = 'all' }: NeuralCanvasProps) {
         fontWeight: 'bold',
     });
 
-    if (nodes.length === 0) return (
+    if (isLoading) return (
         <View style={styles.emptyContainer}>
             <ActivityIndicator size="large" color="#6366f1" />
             <Text style={styles.emptyText}>Initializing Neural Matrix...</Text>
+        </View>
+    );
+
+    if (nodes.length === 0) return (
+        <View style={styles.emptyContainer}>
+            <Text style={styles.emptyIcon}>🌌</Text>
+            <Text style={styles.emptyText}>The Horizon is quiet.</Text>
+            <Text style={styles.emptySubtext}>Start a conversation in Orbit to seed your universe.</Text>
         </View>
     );
 
@@ -683,16 +582,14 @@ export function NeuralCanvas({ filterType = 'all' }: NeuralCanvasProps) {
                             ))}
 
                             {/* 🔥 ENHANCED: Edges mit dynamischer Dicke */}
-                            {edgePairs?.map(([i, j]) => (
+                            {edgePairs?.map(([sourceId, targetId], idx) => (
                                 <NeuralEdge
-                                    key={`edge-${i}-${j}`}
-                                    i={i}
-                                    j={j}
-                                    n={nodes.length}
+                                    key={`edge-${sourceId}-${targetId}`}
+                                    sourceId={sourceId}
+                                    targetId={targetId}
+                                    nodes={nodes}
                                     nodePositionsX={nodePositionsX}
                                     nodePositionsY={nodePositionsY}
-                                    nodePositionsZ={nodePositionsZ}
-                                    similarityMatrix={similarityMatrix}
                                     time={time}
                                 />
                             ))}
@@ -708,7 +605,7 @@ export function NeuralCanvas({ filterType = 'all' }: NeuralCanvasProps) {
                                 />
                             ))}
 
-                            {/* 🔥 ENHANCED: Nodes mit allen Features */}
+                            {/* Node Rendering */}
                             {nodes.map((node, i) => (
                                 <NeuralNode
                                     key={`node-${node.id}`}
@@ -718,16 +615,11 @@ export function NeuralCanvas({ filterType = 'all' }: NeuralCanvasProps) {
                                     nodePositionsY={nodePositionsY}
                                     nodePositionsZ={nodePositionsZ}
                                     nodeImportance={nodeImportance}
-                                    nodeLastAccessed={nodeLastAccessed}
-                                    translateX={translateX}
-                                    translateY={translateY}
                                     scale={scale}
                                     time={time}
                                     font={font}
                                     filterType={filterType}
                                     focusedNodeId={focusedNodeId}
-                                    allNodes={nodes}
-                                    nodeKnnIndices={nodeKnnIndices}
                                 />
                             ))}
 
@@ -821,129 +713,80 @@ function InsightBridge({ nodes, nodePositionsX, nodePositionsY, nodePositionsZ, 
     );
 }
 
-// 🔥 ENHANCED: Edge mit dynamischer Dicke
-function NeuralEdge({ i, j, n, nodePositionsX, nodePositionsY, nodePositionsZ, similarityMatrix, time }: any) {
-    const similarity = useDerivedValue(() => {
-        return similarityMatrix.value[i * n + j] ?? 0;
-    });
+// 🔥 SIMPLIFIED: Beautiful glowing edge with traveler particles
+function NeuralEdge({ sourceId, targetId, nodes, nodePositionsX, nodePositionsY, time }: any) {
+    // Find array indices for source and target
+    const sourceIndex = nodes.findIndex((n: any) => n.id === sourceId);
+    const targetIndex = nodes.findIndex((n: any) => n.id === targetId);
 
-    const isVisible = useDerivedValue(() => similarity.value >= 0.78);
-
-    const ageFactor = useDerivedValue(() => {
-        const avgZ = ((nodePositionsZ.value[i] ?? 0) + (nodePositionsZ.value[j] ?? 0)) / 2;
-        return Math.max(0.25, 1 + avgZ / 1000);
-    });
-
-    const thickness = useDerivedValue(() => {
-        // Dicke basierend auf Ähnlichkeit: 0.78 → 0, 1.0 → 1
-        return (similarity.value - 0.78) / 0.22;
-    });
+    if (sourceIndex === -1 || targetIndex === -1) return null;
 
     const p1 = useDerivedValue(() => ({
-        x: nodePositionsX.value[i] ?? 0,
-        y: nodePositionsY.value[i] ?? 0
+        x: nodePositionsX.value[sourceIndex] ?? 0,
+        y: nodePositionsY.value[sourceIndex] ?? 0
     }));
 
     const p2 = useDerivedValue(() => ({
-        x: nodePositionsX.value[j] ?? 0,
-        y: nodePositionsY.value[j] ?? 0
+        x: nodePositionsX.value[targetIndex] ?? 0,
+        y: nodePositionsY.value[targetIndex] ?? 0
     }));
-
-    const intensity = useDerivedValue(() => {
-        return (similarity.value - 0.75) * 4;
-    });
 
     const uniforms = useDerivedValue(() => ({
         u_time: time.value,
         u_p1: [p1.value.x, p1.value.y],
         u_p2: [p2.value.x, p2.value.y],
-        u_intensity: intensity.value,
-        u_color: [0.38, 0.38, 0.99] // Neon Blue for edges
+        u_intensity: 0.8,
+        u_color: [0.3, 0.4, 0.9] // Pulsing Indigo
     }));
 
-    const edgeOpacity = useDerivedValue(() => isVisible.value ? 1 : 0);
-
-    const strokeWidth = useDerivedValue(() => {
-        const base = 0.5 + thickness.value * 2.5;
-        const pulse = 1 + 0.2 * Math.sin(time.value * 2);
-        return base * pulse;
-    });
-
     return (
-        <Group opacity={edgeOpacity}>
+        <Group>
+            {/* The animated traveler shader */}
             <Shader source={edgeShader} uniforms={uniforms} />
+
+            {/* Very faint static line for structure */}
             <Line
                 p1={p1}
                 p2={p2}
-                color="rgba(99, 102, 241, 0.15)"
-                strokeWidth={strokeWidth}
+                color="rgba(99, 102, 241, 0.05)"
+                strokeWidth={1}
             />
         </Group>
     );
 }
 
-// ... (existing helper functions like getSentimentAura, cosineSimilarity, etc. remain unchanged)
+
 
 function NeuralNode({
     i, node, nodePositionsX, nodePositionsY, nodePositionsZ,
-    nodeImportance, nodeLastAccessed, translateX, translateY,
-    scale, time, font, filterType, focusedNodeId, allNodes, nodeKnnIndices
+    nodeImportance, scale, time, font, filterType, focusedNodeId
 }: any) {
 
     const x = useDerivedValue(() => nodePositionsX.value[i] ?? 0);
     const y = useDerivedValue(() => nodePositionsY.value[i] ?? 0);
 
-    // Color mapping
-    const colorStr = node.type === 'goal' ? "#fde047" : // yellow-300
-        node.type === 'feeling' ? "#e879f9" : // fuchsia-400
-            "#22d3ee"; // cyan-400
-
-    // Filter logic
+    // Filter logic (static - doesn't need SharedValue)
     const isFiltered = filterType !== 'all' && node.type !== filterType;
     const isFocused = node.id === focusedNodeId;
 
-    // Opacity for filtering/focus (can overlay on top of SemanticNode or pass as prop?)
-    // SemanticNode is simple. We might need to wrap it in a Group to apply opacity.
-
-    const nodeOpacity = useDerivedValue(() => {
-        const z = nodePositionsZ.value[i] ?? 0;
-        const zOp = Math.max(0.2, 1 - Math.abs(z) / 50000);
-        const base = isFiltered ? 0.2 : 1.0;
-        const focus = (focusedNodeId && !isFocused) ? 0.3 : 1.0;
-        return base * zOp * focus;
-    });
-
-    // Vector Color for Shader
-    const colorVec = getNodeColorVec(node.type);
-
-    // Active State (Pulse when focused or recently accessed)
-    const active = useDerivedValue(() => {
-        return (isFocused ? 1.0 : 0.0) as number;
-    });
-
-    // Depth of Field (DoF)
-    const blur = useDerivedValue(() => {
-        const z = nodePositionsZ.value[i] ?? 0;
-        // Blur increases with distance from camera (camera at Z > 0, nodes at Z <= 0)
-        // Let's assume focus plane is at Z=0.
-        return Math.min(Math.abs(z) / 100, 8); // Max blur 8px
-    });
+    // Wrap importance in useDerivedValue to avoid reading .value during render
+    const importance = useDerivedValue(() => nodeImportance.value[i] ?? 1.0);
+    const z = useDerivedValue(() => nodePositionsZ.value[i] ?? 0);
 
     return (
-        <Group opacity={nodeOpacity}>
-            <SemanticNode
-                x={x}
-                y={y}
-                color={colorStr}
-                label="" // No label
-                zoomLevel={scale}
-                selected={isFocused}
-                shader={nodeShader}
-                time={time}
-                active={active}
-                colorVec={colorVec}
-                blur={blur} font={undefined} />
-        </Group>
+        <SemanticNode
+            x={x}
+            y={y}
+            z={z}
+            type={node.type}
+            content={node.content}
+            importance={importance}
+            time={time}
+            zoomLevel={scale}
+            isFocused={isFocused}
+            isFiltered={isFiltered}
+            font={font}
+        />
     );
 }
 
@@ -1033,5 +876,16 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: '700',
         letterSpacing: 1
-    }
+    },
+    emptyIcon: {
+        fontSize: 48,
+        marginBottom: 8,
+    },
+    emptySubtext: {
+        marginTop: 8,
+        color: 'rgba(255, 255, 255, 0.4)',
+        fontSize: 12,
+        textAlign: 'center',
+        paddingHorizontal: 40,
+    },
 });

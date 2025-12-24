@@ -1,50 +1,30 @@
-# Welcome to your Expo app 👋
+# 🧠 Hearify — Neural Architecture for Thought
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Hearify is a next-generation "Neural Architecture" that captures, vectorizes, and spatially organizes your thoughts into a living, breathing universe.
 
-## Get started
+## 🌌 The Trinity Interface
+Hearify replaces standard tab navigation with a physics-based "Trinity" interface:
+*   **Orbit (Input)**: The central presence. Voice-first capturing of facts, feelings, and goals.
+*   **Horizon (Context)**: A 3D spatial canvas where nodes cluster semantically in real-time.
+*   **Chronicle (Archive)**: A bento-grid chronicle of your personal history.
 
-1. Install dependencies
+## 🚀 Tech Stack
+*   **Core**: React Native + Expo (SDK 52+ / New Architecture)
+*   **Graphics**: @shopify/react-native-skia (High-performance shaders)
+*   **Intelligence**: DeepSeek R1 (Reasoning), OpenAI (Embeddings), Groq (Transcription)
+*   **Database**: op-sqlite + sqlite-vec (Native JSI vector search)
+*   **Animation**: React Native Reanimated 3
 
-   ```bash
-   npm install
-   ```
+## 🛠️ Getting Started
+1. **Install Dependencies**: `npm install`
+2. **Setup Env**: Copy `.env.example` to `.env` and add your API keys.
+3. **Run**: `npx expo start`
 
-2. Start the app
+## 🏆 Features
+- **Write-Time Pathfinding**: Semantic connections are pre-calculated for instant canvas loading.
+- **Neural Glass UI**: A premium obsidian/glass aesthetic with smooth micro-animations.
+- **Community Detection**: Automated Louvain clustering of thoughts into topics.
+- **Multimodal AI**: Integrated reasoning and TTS for a conversational experience.
 
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
-
-```bash
-npm run reset-project
-```
-
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
-
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+---
+*Created with focus on visual excellence and semantic intelligence.*

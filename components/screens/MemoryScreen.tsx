@@ -4,6 +4,7 @@
 
 import { getAllSnippets } from '@/db';
 import { Snippet } from '@/db/schema';
+import { useContextStore } from '@/store/contextStore';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -16,8 +17,8 @@ import {
     Text,
     View
 } from 'react-native';
-import { ScrollView } from 'react-native-gesture-handler';
-import Animated, { FadeIn, FadeInUp, SharedValue, SlideInRight, useAnimatedScrollHandler } from 'react-native-reanimated';
+import { Gesture, GestureDetector, ScrollView } from 'react-native-gesture-handler';
+import Animated, { FadeIn, FadeInUp, runOnJS, SharedValue, SlideInRight, useAnimatedScrollHandler } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Sentiment color mapping
@@ -171,9 +172,7 @@ export function MemoryScreen({ scrollRef, isAtTop }: MemoryScreenProps) {
                                 index={index}
                                 isLarge={snippet.type === 'goal' && index < 2}
                                 onShowInHorizon={() => {
-                                    // Navigate to Horizon with focus on this node
-                                    // In MindFlow this might need to change, but using router for now
-                                    router.push('/canvas');
+                                    useContextStore.getState().navigateToNode(snippet.id);
                                 }}
                             />
                         ))}
@@ -221,41 +220,53 @@ function MemoryCard({ snippet, index, isLarge, onShowInHorizon }: MemoryCardProp
     const date = new Date(snippet.timestamp);
     const timeAgo = getTimeAgo(date);
 
+    const panGesture = Gesture.Pan()
+        .onEnd((e) => {
+            // Swipe UP = Throw to Orbit
+            if (e.translationY < -150 && e.velocityY < -500) {
+                runOnJS(() => {
+                    useContextStore.getState().setActiveScreen('orbit');
+                })();
+            }
+        });
+
     return (
-        <Animated.View
-            entering={SlideInRight.delay(index * 50).springify()}
-            style={[
-                styles.card,
-                isLarge && styles.cardLarge,
-                { backgroundColor: accent.bg, borderColor: accent.border }
-            ]}
-        >
-            {/* Type Badge + Sentiment Dot */}
-            <View style={styles.cardHeader}>
-                <View style={[styles.typeBadge, { backgroundColor: accent.bg, borderColor: accent.border }]}>
-                    <Text style={[styles.typeBadgeText, { color: accent.text }]}>
-                        {snippet.type.toUpperCase()}
-                    </Text>
-                </View>
-                <View style={[styles.sentimentDot, { backgroundColor: sentimentColor }]} />
-            </View>
-
-            {/* Content */}
-            <Text
-                style={[styles.cardContent, isLarge && styles.cardContentLarge]}
-                numberOfLines={isLarge ? 5 : 3}
+        <GestureDetector gesture={panGesture}>
+            <Animated.View
+                entering={SlideInRight.delay(index * 50).springify()}
+                style={[
+                    styles.card,
+                    isLarge && styles.cardLarge,
+                    { backgroundColor: accent.bg, borderColor: accent.border }
+                ]}
             >
-                {snippet.content}
-            </Text>
+                {/* Type Badge + Sentiment Dot */}
+                <View style={styles.cardHeader}>
+                    <View style={[styles.typeBadge, { backgroundColor: accent.bg, borderColor: accent.border }]}>
+                        <Text style={[styles.typeBadgeText, { color: accent.text }]}>
+                            {snippet.type.toUpperCase()}
+                        </Text>
+                    </View>
+                    <View style={[styles.sentimentDot, { backgroundColor: sentimentColor }]} />
+                </View>
 
-            {/* Footer */}
-            <View style={styles.cardFooter}>
-                <Text style={styles.cardTime}>{timeAgo}</Text>
-                <Pressable style={styles.horizonButton} onPress={onShowInHorizon}>
-                    <Text style={styles.horizonButtonText}>🌌 View</Text>
-                </Pressable>
-            </View>
-        </Animated.View>
+                {/* Content */}
+                <Text
+                    style={[styles.cardContent, isLarge && styles.cardContentLarge]}
+                    numberOfLines={isLarge ? 5 : 3}
+                >
+                    {snippet.content}
+                </Text>
+
+                {/* Footer */}
+                <View style={styles.cardFooter}>
+                    <Text style={styles.cardTime}>{timeAgo}</Text>
+                    <Pressable style={styles.horizonButton} onPress={onShowInHorizon}>
+                        <Text style={styles.horizonButtonText}>🌌 View</Text>
+                    </Pressable>
+                </View>
+            </Animated.View>
+        </GestureDetector>
     );
 }
 

@@ -14,6 +14,7 @@ import { processWithReasoning } from '@/services/deepseek';
 import { getFastResponse } from '@/services/fastchat';
 import { transcribeAudio } from '@/services/groq';
 import { generateEmbedding, generateEmbeddings } from '@/services/openai';
+import { useContextStore } from '@/store/contextStore';
 import { useConversationStore } from '@/store/conversation';
 import { useProfileStore } from '@/store/profile';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
@@ -156,6 +157,9 @@ export function OrbitScreen() {
                 )
             ]);
 
+            // 🔥 Sync focus vector to global store
+            useContextStore.getState().setFocusVector(queryEmbed);
+
             const similarSnippets = await findSimilarSnippets(queryEmbed, 5);
             const context = similarSnippets.map(s => s.content);
             setEmbedding(false);
@@ -278,7 +282,6 @@ export function OrbitScreen() {
                 <SideMenu
                     isOpen={menuOpen}
                     onClose={() => setMenuOpen(false)}
-                    activeRoute="home"
                 />
 
                 {/* Minimal Header with Burger */}

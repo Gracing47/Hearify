@@ -1,126 +1,92 @@
-/**
- * Onboarding Screen - First-time user experience
- * 
- * Creates a "curious but safe" environment for new users.
- * Collects minimal data: just a name and optional avatar.
- */
-
+import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
 import React, { useState } from 'react';
 import {
-    Keyboard,
+    ActivityIndicator,
     KeyboardAvoidingView,
     Platform,
     StyleSheet,
     Text,
     TextInput,
     TouchableOpacity,
-    TouchableWithoutFeedback,
     View
 } from 'react-native';
-import Animated, { FadeInDown, FadeInUp } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeInDown } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useProfileStore } from '../store/profile';
 
-const AVATAR_OPTIONS = ['🧠', '✨', '🌌', '🔮', '💎', '🌙', '⚡', '🎯'];
-
 export default function OnboardingScreen() {
     const [name, setName] = useState('');
-    const [selectedAvatar, setSelectedAvatar] = useState('🧠');
-    const [isCreating, setIsCreating] = useState(false);
-
-    const { createProfile, completeOnboarding } = useProfileStore();
+    const [isSubmitting, setIsSubmitting] = useState(false);
     const insets = useSafeAreaInsets();
+    const { createProfile, completeOnboarding } = useProfileStore();
 
-    const handleContinue = async () => {
-        if (!name.trim() || isCreating) return;
+    const handleStart = async () => {
+        if (!name.trim()) return;
 
-        setIsCreating(true);
+        setIsSubmitting(true);
         try {
-            await createProfile(name.trim(), selectedAvatar);
+            await createProfile(name.trim(), '🧠');
             await completeOnboarding();
-            router.replace('/(tabs)');
+            // Routing is handled automatically by RootLayout
         } catch (error) {
             console.error('[Onboarding] Failed to create profile:', error);
-            setIsCreating(false);
+            setIsSubmitting(false);
         }
     };
 
     return (
-        <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
-            <View style={styles.container}>
-                <LinearGradient
-                    colors={['#0a0a0f', '#1a1a2e', '#09090b']}
-                    style={StyleSheet.absoluteFill}
-                />
+        <View style={styles.container}>
+            <LinearGradient
+                colors={['#0a0a0f', '#000']}
+                style={StyleSheet.absoluteFill}
+            />
 
-                <KeyboardAvoidingView
-                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                    style={[styles.content, { paddingTop: insets.top + 60 }]}
-                >
-                    {/* Welcome Message */}
-                    <Animated.View entering={FadeInUp.delay(200)} style={styles.header}>
-                        <Text style={styles.welcomeEmoji}>🌌</Text>
-                        <Text style={styles.title}>Willkommen bei Orbit</Text>
-                        <Text style={styles.subtitle}>
-                            Dein persönliches Gedächtnis-Universum.{'\n'}
-                            Alles was du sagst, wird ein Stern in deinem Raum.
-                        </Text>
-                    </Animated.View>
+            <KeyboardAvoidingView
+                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                style={styles.content}
+            >
+                <Animated.View entering={FadeIn.duration(1000)} style={styles.heroSection}>
+                    <View style={styles.orbPlaceholder}>
+                        <LinearGradient
+                            colors={['#6366f1', '#a855f7']}
+                            style={styles.orb}
+                        />
+                    </View>
+                    <Text style={styles.title}>Hearify</Text>
+                    <Text style={styles.subtitle}>Your Neural Architecture begins here.</Text>
+                </Animated.View>
 
-                    {/* Avatar Selection */}
-                    <Animated.View entering={FadeInDown.delay(400)} style={styles.section}>
-                        <Text style={styles.label}>Wähle dein Symbol</Text>
-                        <View style={styles.avatarGrid}>
-                            {AVATAR_OPTIONS.map((emoji) => (
-                                <TouchableOpacity
-                                    key={emoji}
-                                    style={[
-                                        styles.avatarOption,
-                                        selectedAvatar === emoji && styles.avatarSelected
-                                    ]}
-                                    onPress={() => setSelectedAvatar(emoji)}
-                                >
-                                    <Text style={styles.avatarEmoji}>{emoji}</Text>
-                                </TouchableOpacity>
-                            ))}
-                        </View>
-                    </Animated.View>
-
-                    {/* Name Input */}
-                    <Animated.View entering={FadeInDown.delay(600)} style={styles.section}>
-                        <Text style={styles.label}>Wie soll ich dich nennen?</Text>
+                <Animated.View entering={FadeInDown.delay(400).springify()} style={styles.formSection}>
+                    <BlurView intensity={20} tint="dark" style={styles.inputContainer}>
                         <TextInput
                             style={styles.input}
-                            placeholder="Dein Name..."
-                            placeholderTextColor="#666"
+                            placeholder="How shall I call you?"
+                            placeholderTextColor="rgba(255, 255, 255, 0.3)"
                             value={name}
                             onChangeText={setName}
-                            autoCapitalize="words"
-                            autoCorrect={false}
-                            maxLength={20}
+                            autoFocus
                         />
-                    </Animated.View>
+                    </BlurView>
 
-                    {/* Continue Button */}
-                    <Animated.View entering={FadeInDown.delay(800)} style={styles.footer}>
-                        <TouchableOpacity
-                            style={[
-                                styles.continueButton,
-                                (!name.trim() || isCreating) && styles.continueButtonDisabled
-                            ]}
-                            onPress={handleContinue}
-                            disabled={!name.trim() || isCreating}
-                        >
-                            <Text style={styles.continueText}>
-                                {isCreating ? 'Erstelle dein Universum...' : 'Los geht\'s'}
-                            </Text>
-                        </TouchableOpacity>
-                    </Animated.View>
-                </KeyboardAvoidingView>
-            </View>
-        </TouchableWithoutFeedback>
+                    <TouchableOpacity
+                        style={[styles.button, !name.trim() && styles.buttonDisabled]}
+                        onPress={handleStart}
+                        disabled={!name.trim() || isSubmitting}
+                    >
+                        {isSubmitting ? (
+                            <ActivityIndicator color="#fff" />
+                        ) : (
+                            <Text style={styles.buttonText}>Initialize Consciousness</Text>
+                        )}
+                    </TouchableOpacity>
+                </Animated.View>
+
+                <View style={[styles.footer, { marginBottom: insets.bottom + 20 }]}>
+                    <Text style={styles.footerText}>Phase 2 Engine: Native Vector Search Enabled</Text>
+                </View>
+            </KeyboardAvoidingView>
+        </View>
     );
 }
 
@@ -131,96 +97,94 @@ const styles = StyleSheet.create({
     },
     content: {
         flex: 1,
-        paddingHorizontal: 24,
+        paddingHorizontal: 32,
+        justifyContent: 'center',
     },
-    header: {
+    heroSection: {
         alignItems: 'center',
-        marginBottom: 40,
+        marginBottom: 60,
     },
-    welcomeEmoji: {
-        fontSize: 64,
-        marginBottom: 20,
+    orbPlaceholder: {
+        width: 120,
+        height: 120,
+        borderRadius: 60,
+        marginBottom: 24,
+        justifyContent: 'center',
+        alignItems: 'center',
+        shadowColor: '#6366f1',
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.5,
+        shadowRadius: 20,
+    },
+    orb: {
+        width: '100%',
+        height: '100%',
+        borderRadius: 60,
+        opacity: 0.8,
     },
     title: {
-        fontSize: 28,
+        fontSize: 42,
         fontWeight: '800',
         color: '#fff',
-        textAlign: 'center',
-        letterSpacing: -0.5,
-        marginBottom: 12,
+        letterSpacing: -1,
     },
     subtitle: {
         fontSize: 16,
-        color: '#888',
+        color: '#666',
+        marginTop: 8,
         textAlign: 'center',
-        lineHeight: 24,
     },
-    section: {
-        marginBottom: 32,
+    formSection: {
+        width: '100%',
     },
-    label: {
-        fontSize: 14,
-        color: '#6366f1',
-        fontWeight: '700',
-        letterSpacing: 1,
-        textTransform: 'uppercase',
+    inputContainer: {
+        borderRadius: 20,
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.1)',
         marginBottom: 16,
-    },
-    avatarGrid: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
+        paddingHorizontal: 20,
+        height: 64,
         justifyContent: 'center',
-        gap: 12,
-    },
-    avatarOption: {
-        width: 56,
-        height: 56,
-        borderRadius: 28,
-        backgroundColor: 'rgba(255,255,255,0.05)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        borderWidth: 2,
-        borderColor: 'transparent',
-    },
-    avatarSelected: {
-        borderColor: '#6366f1',
-        backgroundColor: 'rgba(99, 102, 241, 0.2)',
-    },
-    avatarEmoji: {
-        fontSize: 28,
+        overflow: 'hidden',
     },
     input: {
-        backgroundColor: 'rgba(255,255,255,0.05)',
-        borderRadius: 16,
-        paddingHorizontal: 20,
-        paddingVertical: 16,
         fontSize: 18,
         color: '#fff',
-        borderWidth: 1,
-        borderColor: 'rgba(255,255,255,0.1)',
+        fontWeight: '500',
     },
-    footer: {
-        marginTop: 'auto',
-        paddingBottom: 40,
-    },
-    continueButton: {
+    button: {
+        height: 64,
+        borderRadius: 20,
         backgroundColor: '#6366f1',
-        paddingVertical: 18,
-        borderRadius: 16,
+        justifyContent: 'center',
         alignItems: 'center',
         shadowColor: '#6366f1',
         shadowOffset: { width: 0, height: 8 },
-        shadowOpacity: 0.4,
+        shadowOpacity: 0.3,
         shadowRadius: 12,
-        elevation: 8,
     },
-    continueButtonDisabled: {
-        backgroundColor: '#333',
+    buttonDisabled: {
+        backgroundColor: '#222',
         shadowOpacity: 0,
     },
-    continueText: {
+    buttonText: {
         color: '#fff',
-        fontSize: 18,
+        fontSize: 16,
+        fontWeight: '700',
+        letterSpacing: 0.5,
+    },
+    footer: {
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        alignItems: 'center',
+    },
+    footerText: {
+        fontSize: 10,
+        color: 'rgba(255, 255, 255, 0.2)',
+        textTransform: 'uppercase',
+        letterSpacing: 1.5,
         fontWeight: '700',
     },
 });

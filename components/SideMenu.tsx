@@ -3,8 +3,8 @@
  * Premium glassmorphism drawer for Orbit
  */
 
+import { useContextStore } from '@/store/contextStore';
 import { BlurView } from 'expo-blur';
-import { useRouter } from 'expo-router';
 import React from 'react';
 import {
     Dimensions,
@@ -28,38 +28,31 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MENU_WIDTH = SCREEN_WIDTH * 0.75;
 
 interface MenuItem {
-    key: string;
+    key: 'orbit' | 'horizon' | 'memory';
     label: string;
     icon: string;
-    route: '/(tabs)' | '/(tabs)/canvas' | '/(tabs)/explore';
 }
 
 const menuItems: MenuItem[] = [
-    { key: 'home', label: 'Orbit', icon: '🏠', route: '/(tabs)' },
-    { key: 'horizon', label: 'Horizon', icon: '🧠', route: '/(tabs)/canvas' },
-    { key: 'memory', label: 'Memory', icon: '📋', route: '/(tabs)/explore' },
+    { key: 'orbit', label: 'Orbit', icon: '🏠' },
+    { key: 'horizon', label: 'Horizon', icon: '🧠' },
+    { key: 'memory', label: 'Memory', icon: '📋' },
 ];
 
 interface SideMenuProps {
     isOpen: boolean;
     onClose: () => void;
-    activeRoute?: string;
 }
 
-export function SideMenu({ isOpen, onClose, activeRoute = 'home' }: SideMenuProps) {
+export function SideMenu({ isOpen, onClose }: SideMenuProps) {
     const insets = useSafeAreaInsets();
-    const router = useRouter();
+    const activeScreen = useContextStore((state) => state.activeScreen);
+    const setActiveScreen = useContextStore((state) => state.setActiveScreen);
 
-    const handleNavigation = (route: MenuItem['route']) => {
+    const handleNavigation = (screen: MenuItem['key']) => {
         onClose();
-        // Since we are using MindLayout, we might need a context to switch vertical index? 
-        // For now, let's just keep router logic as the files exist, 
-        // but arguably they are now just one screen. 
-        // If the user wants vertical swipe ONLY, the menu might be redundant for navigation 
-        // but useful for other things. 
-        // Let's leave it as is, but maybe fix if routes are dead.
         setTimeout(() => {
-            router.push(route);
+            setActiveScreen(screen);
         }, 150);
     };
 
@@ -109,12 +102,12 @@ export function SideMenu({ isOpen, onClose, activeRoute = 'home' }: SideMenuProp
                     {/* Menu Items */}
                     <View style={styles.menuItems}>
                         {menuItems.map((item) => {
-                            const isActive = activeRoute === item.key;
+                            const isActive = activeScreen === item.key;
                             return (
                                 <TouchableOpacity
                                     key={item.key}
                                     style={[styles.menuItem, isActive && styles.menuItemActive]}
-                                    onPress={() => handleNavigation(item.route)}
+                                    onPress={() => handleNavigation(item.key)}
                                     activeOpacity={0.7}
                                 >
                                     <Text style={styles.menuItemIcon}>{item.icon}</Text>
