@@ -126,6 +126,21 @@ export const SCHEMA = {
     );
   `,
 
+  // Phase 5: Daily Delta Summaries
+  dailyDeltas: `
+    CREATE TABLE IF NOT EXISTS daily_deltas (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      date TEXT UNIQUE NOT NULL,
+      summary TEXT NOT NULL,
+      highlights TEXT,
+      mood TEXT CHECK(mood IN ('analytical', 'reflective', 'creative', 'mixed')),
+      node_count INTEGER DEFAULT 0,
+      top_clusters TEXT,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_deltas_date ON daily_deltas(date);
+  `,
+
   // Migrations for schema evolution
   migrations: [
     `ALTER TABLE snippets ADD COLUMN z REAL DEFAULT 0;`,

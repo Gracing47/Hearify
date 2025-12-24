@@ -2,6 +2,7 @@
  * Orbit Screen - The Neural AI Companion Interface (formerly HomeScreen)
  */
 
+import { DeltaCard } from '@/components/DeltaCard';
 import { NeuralConfirmation } from '@/components/NeuralConfirmation';
 import { NeuralOrb } from '@/components/NeuralOrb';
 import { NeuralThinking } from '@/components/NeuralThinking';
@@ -11,6 +12,7 @@ import { findSimilarSnippets, insertSnippet } from '@/db';
 import { useTTS } from '@/hooks/useTTS';
 import { useVoiceCapture } from '@/hooks/useVoiceCapture';
 import { processWithReasoning } from '@/services/deepseek';
+import { DailyDelta, generateYesterdayDelta, getDeltaForDate } from '@/services/DeltaService';
 import { getFastResponse } from '@/services/fastchat';
 import { transcribeAudio } from '@/services/groq';
 import { generateEmbedding, generateEmbeddings } from '@/services/openai';
@@ -54,6 +56,8 @@ export function OrbitScreen({ layoutY }: OrbitScreenProps) {
     const [appState, setAppState] = useState<AppState>('idle');
     const [isKeysConfigured, setIsKeysConfigured] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
+    const [dailyDelta, setDailyDelta] = useState<DailyDelta | null>(null);
+    const [deltaShown, setDeltaShown] = useState(true);
 
     const voiceCapture = useVoiceCapture();
     const tts = useTTS();
@@ -132,6 +136,27 @@ export function OrbitScreen({ layoutY }: OrbitScreenProps) {
             setIsKeysConfigured(configured);
         };
         init();
+    }, []);
+
+    // Fetch yesterday's Daily Delta
+    useEffect(() => {
+        const fetchDelta = async () => {
+            try {
+                const yesterday = new Date();
+                yesterday.setDate(yesterday.getDate() - 1);
+                let delta = await getDeltaForDate(yesterday);
+
+                // If no delta exists, try to generate one
+                if (!delta) {
+                    delta = await generateYesterdayDelta();
+                }
+
+                setDailyDelta(delta);
+            } catch (e) {
+                console.warn('[OrbitScreen] Delta fetch failed:', e);
+            }
+        };
+        fetchDelta();
     }, []);
 
     const handleRecordPress = useCallback(async () => {
@@ -324,12 +349,20 @@ export function OrbitScreen({ layoutY }: OrbitScreenProps) {
                 {messages.length === 0 ? (
                     /* Welcome Screen - Centered Layout */
                     <View style={styles.welcomeContainer}>
+                        {/* Daily Delta Card */}
+                        {dailyDelta && deltaShown && (
+                            <DeltaCard
+                                delta={dailyDelta}
+                                onDismiss={() => setDeltaShown(false)}
+                            />
+                        )}
+
                         {/* Neural Orb - Visual Center */}
                         <Animated.View style={[styles.heroOrbWrapper, heroOrbStyle]}>
                             <NeuralOrb
                                 intensity={tts.intensity}
                                 state={getOrbState()}
-                                size={200}
+                                size={180}
                             />
                         </Animated.View>
 

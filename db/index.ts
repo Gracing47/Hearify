@@ -65,7 +65,8 @@ async function initDatabaseInternal(targetDbName: string): Promise<DB> {
             SCHEMA.semanticEdges,
             SCHEMA.clusterCentroids,
             SCHEMA.externalResources,
-            SCHEMA.resourceLinks
+            SCHEMA.resourceLinks,
+            SCHEMA.dailyDeltas
         ];
 
         for (const sqlBlock of statements) {
