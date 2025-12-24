@@ -66,23 +66,20 @@ export const MindLayout = () => {
         .onUpdate((e) => {
             let nextY = contextY.value + e.translationY * 0.8;
 
-            // Check if we are in Memory Zone (bottom, nextY < 0?)
-            // Wait, in this layout: 
-            // Orbit at 0
-            // Horizon at SCREEN_HEIGHT (top of container is moved DOWN)
-            // Memory at -SCREEN_HEIGHT (top of container is moved UP)
+            // In Memory zone: only block when user is scrolling content (not at top)
+            // and trying to swipe down to scroll more content
             if (contextY.value <= -SCREEN_HEIGHT * 0.9) {
-                const tryingToScrollContentUp = e.translationY > 0; // Swipe Down
-                const tryingToScrollContentDown = e.translationY < 0; // Swipe Up
-
-                if (tryingToScrollContentUp && !isMemoryAtTop.value) {
+                // User is in Memory screen
+                // Only block if: Memory is NOT at top AND user is swiping down (positive Y = reveal more content)
+                if (e.translationY > 0 && !isMemoryAtTop.value) {
+                    // User wants to scroll up in content (see more content), block nav swipe
                     nextY = -SCREEN_HEIGHT;
                 }
-                if (tryingToScrollContentDown) {
-                    nextY = -SCREEN_HEIGHT;
-                }
+                // Swiping up (negative Y) = trying to go back to Orbit - ALWAYS ALLOW
             }
 
+            // Clamp to valid range
+            nextY = Math.max(-SCREEN_HEIGHT, Math.min(SCREEN_HEIGHT, nextY));
             translateY.value = nextY;
         })
         .onEnd((e) => {
@@ -149,17 +146,21 @@ export const MindLayout = () => {
 
                     {/* ▲ TOP: HORIZON (The Stars) */}
                     <View style={[styles.screen, { top: -SCREEN_HEIGHT }]}>
-                        <HorizonScreen />
+                        <HorizonScreen layoutY={translateY} />
                     </View>
 
                     {/* ● CENTER: ORBIT (The Voice) */}
                     <Animated.View style={[styles.screen, orbitStyle]}>
-                        <OrbitScreen />
+                        <OrbitScreen layoutY={translateY} />
                     </Animated.View>
 
                     {/* ▼ BOTTOM: MEMORY (The Archive) */}
                     <View style={[styles.screen, { top: SCREEN_HEIGHT }]}>
-                        <MemoryScreen scrollRef={memoryScrollRef} isAtTop={isMemoryAtTop} />
+                        <MemoryScreen
+                            scrollRef={memoryScrollRef}
+                            isAtTop={isMemoryAtTop}
+                            layoutY={translateY}
+                        />
                     </View>
 
                 </Animated.View>

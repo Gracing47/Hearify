@@ -3,141 +3,137 @@ import { SCHEMA, type Snippet } from './schema';
 
 let db: DB | null = null;
 let currentDbName: string = 'hearify.db';
+let isInitialized = false;
+let initializationPromise: Promise<DB> | null = null;
 
 /**
- * Initialize native database connection
- * @param dbName - Optional database name for profile isolation (default: 'hearify.db')
+ * 🚀 SPACEX PRE-FLIGHT: Check if database is fully ready (non-blocking)
  */
-export async function initDatabase(dbName?: string): Promise<DB> {
-    const targetDbName = dbName || 'hearify.db';
+export function isDatabaseReady(): boolean {
+    return isInitialized && db !== null;
+}
 
-    // If switching to a different database, close the current one
-    if (db && currentDbName !== targetDbName) {
-        console.log(`[DB] Switching database from ${currentDbName} to ${targetDbName}`);
-        db.close();
-        db = null;
+/**
+ * 🚀 SPACEX PRINCIPLE: Ensure database is fully ready before any operations
+ * Returns a promise that resolves when DB is completely initialized including migrations
+ */
+export async function ensureDatabaseReady(dbName?: string): Promise<DB> {
+    const targetDbName = dbName || currentDbName;
+
+    // If already fully initialized with same DB, return immediately
+    if (isInitialized && db && currentDbName === targetDbName) {
+        return db;
     }
 
-    if (db) return db;
+    // If initialization in progress for same DB, wait for it
+    if (initializationPromise && currentDbName === targetDbName) {
+        return initializationPromise;
+    }
 
-    currentDbName = targetDbName;
+    // Start new initialization
+    initializationPromise = initDatabaseInternal(targetDbName);
+    return initializationPromise;
+}
 
-    // Open database with sqlite-vec extension enabled
-    db = open({
-        name: targetDbName,
-    });
+/**
+ * Internal initialization - runs schema, migrations, and backfill
+ */
+async function initDatabaseInternal(targetDbName: string): Promise<DB> {
+    const startTime = Date.now();
+    console.log(`[DB] 🚀 Starting full initialization: ${targetDbName}`);
 
-    // Create tables (individual execution for safety)
-    // Execute Schema Statements
-    const statements = [
-        SCHEMA.snippets,          // Contains TABLE + INDEX
-        SCHEMA.vectorTableFast,   // Virtual Table
-        SCHEMA.vectorTableRich,   // Virtual Table
-        SCHEMA.semanticEdges,     // Standard Table
-        SCHEMA.clusterCentroids,  // Standard Table
-        SCHEMA.externalResources, // Standard Table
-        SCHEMA.resourceLinks      // Standard Table
-    ];
+    try {
+        // If switching databases, close current
+        if (db && currentDbName !== targetDbName) {
+            console.log(`[DB] Switching database from ${currentDbName} to ${targetDbName}`);
+            db.close();
+            db = null;
+            isInitialized = false;
+        }
 
-    for (const sqlBlock of statements) {
-        // Naive split by ';' is risky if constraints contain ';', but standard SQL usually terminates with ;
-        // We will filter out empty strings/whitespace
-        const queries = sqlBlock
-            .split(';')
-            .map(s => s.trim())
-            .filter(s => s.length > 0);
+        currentDbName = targetDbName;
 
-        for (const query of queries) {
-            try {
-                await db.execute(query);
-            } catch (e: any) {
-                // Ignore specific "table already exists" errors if they aren't caught by IF NOT EXISTS
-                if (!e.message?.includes('already exists')) {
-                    console.warn(`[DB] Schema Warning: ${e.message} \nQuery: ${query.substring(0, 50)}...`);
+        // Open database (JSI-based, instant)
+        db = open({ name: targetDbName });
+        console.log(`[DB] Database opened: ${targetDbName}`);
+
+        // Execute schema statements
+        const statements = [
+            SCHEMA.snippets,
+            SCHEMA.vectorTableFast,
+            SCHEMA.vectorTableRich,
+            SCHEMA.semanticEdges,
+            SCHEMA.clusterCentroids,
+            SCHEMA.externalResources,
+            SCHEMA.resourceLinks
+        ];
+
+        for (const sqlBlock of statements) {
+            const queries = sqlBlock.split(';').map(s => s.trim()).filter(s => s.length > 0);
+            for (const query of queries) {
+                try {
+                    await db.execute(query);
+                } catch (e: any) {
+                    if (!e.message?.includes('already exists')) {
+                        console.warn(`[DB] Schema Warning: ${e.message}`);
+                    }
                 }
             }
         }
-    }
 
-    // Run migrations for spatial canvas
-    for (const migration of SCHEMA.migrations) {
-        try {
-            await db.execute(migration);
-        } catch (e) {
-            // Likely column already exists, which is fine
-        }
-    }
-
-    console.log(`[DB] Native JSI Database initialized: ${targetDbName}`);
-
-    // ✨ SELF-HEALING: Backfill edges for existing snippets if table is empty
-    backfillEdges().catch(e => console.warn('[DB] Backfill failed:', e));
-
-    return db;
-}
-
-/**
- * Migration: Calculate edges for snippets that don't have them.
- * This restores Horizon connections for existing data.
- */
-async function backfillEdges() {
-    const database = getDb();
-    const edgeCount = await database.execute('SELECT COUNT(*) as count FROM semantic_edges');
-    if ((edgeCount.rows?.[0] as any).count > 0) return; // Already indexed
-
-    console.log('[DB] Starting Edge Backfill Migration...');
-    const snippets = await getAllSnippetsWithEmbeddings();
-    if (snippets.length < 2) return;
-
-    for (let i = 0; i < snippets.length; i++) {
-        const s1 = snippets[i];
-        if (!s1.embedding) continue;
-
-        for (let j = i + 1; j < snippets.length; j++) {
-            const s2 = snippets[j];
-            if (!s2.embedding) continue;
-
-            const sim = cosineSimilarity(s1.embedding, s2.embedding);
-            if (sim > 0.75) {
-                await database.execute(
-                    'INSERT OR IGNORE INTO semantic_edges (source_id, target_id, weight, created_at) VALUES (?, ?, ?, ?)',
-                    [s1.id, s2.id, sim, Date.now()]
-                );
-                await database.execute(
-                    'INSERT OR IGNORE INTO semantic_edges (source_id, target_id, weight, created_at) VALUES (?, ?, ?, ?)',
-                    [s2.id, s1.id, sim, Date.now()]
-                );
+        // Run migrations
+        for (const migration of SCHEMA.migrations) {
+            try {
+                await db.execute(migration);
+            } catch (e) {
+                // Column likely already exists
             }
         }
+
+        // 🚀 CRITICAL: Run backfill SYNCHRONOUSLY (not fire-and-forget!)
+        console.log('[DB] Starting Edge Backfill Migration...');
+        await backfillEdges();
+        console.log('[DB] Edge Backfill complete');
+
+        // Mark as fully initialized
+        isInitialized = true;
+        const duration = Date.now() - startTime;
+        console.log(`[DB] ✅ Database fully initialized in ${duration}ms`);
+
+        return db;
+    } catch (error) {
+        console.error('[DB] ❌ Initialization failed:', error);
+        initializationPromise = null; // Allow retry
+        throw error;
     }
-    console.log('[DB] Edge Backfill complete.');
 }
 
 /**
- * Helper: Cosine Similarity for backfill
+ * Legacy function - calls ensureDatabaseReady internally
+ * @deprecated Use ensureDatabaseReady() instead
  */
-function cosineSimilarity(a: Float32Array, b: Float32Array): number {
-    let dot = 0, mA = 0, mB = 0;
-    for (let i = 0; i < a.length; i++) {
-        dot += a[i] * b[i];
-        mA += a[i] * a[i];
-        mB += b[i] * b[i];
-    }
-    return dot / (Math.sqrt(mA) * Math.sqrt(mB) || 1);
+export async function initDatabase(dbName?: string): Promise<DB> {
+    return ensureDatabaseReady(dbName);
 }
 
 /**
- * Get current database name
+ * 🚀 MIGRATION: Edge calculation is now handled by sqlite-vec or SatelliteInsertEngine
  */
+export async function backfillEdges() {
+    // Legacy support: In the future, this can use native sqlite-vec JOINs
+    console.log('[DB] Edge Backfill currently relying on Write-Time indexing.');
+}
+
+
 export function getCurrentDbName(): string {
     return currentDbName;
 }
 
 /**
- * Get database instance
+ * Get database instance (throws if not initialized)
  */
-function getDb(): DB {
-    if (!db) throw new Error('Database not initialized');
+export function getDb(): DB {
+    if (!db) throw new Error('Database not initialized. Call ensureDatabaseReady() first.');
     return db;
 }
 
@@ -183,33 +179,10 @@ export async function insertSnippet(
 
         console.log(`[DB] Native Insert: ${snippetId} [${topic}/${sentiment}] with dual-embeddings`);
 
-        // 3. ✨ NEW: Calculate & Store Semantic Edges Immediately (Write-Time)
+        // 3. ✨ STARLINK STRATEGY: Hand off to Satellite Engine for background processing
         if (embeddingRich) {
-            // Find top 10 similar nodes (excluding self)
-            const similarNodes = await findSimilarSnippets(embeddingRich, 10);
-
-            for (const node of similarNodes) {
-                if (node.id === snippetId) continue;
-
-                // We access the 'distance' from the result, which is actually cosine distance (lower is better?)
-                // Wait, sqlite-vec returns 'distance'. 
-                // For cosine, distance = 1 - similarity. So similarity = 1 - distance.
-                // Let's assume the query returns rows with a 'distance' column.
-                const dist = (node as any).distance || 0;
-                const similarity = 1 - dist;
-
-                if (similarity > 0.5) {
-                    await database.execute(
-                        'INSERT INTO semantic_edges (source_id, target_id, weight, created_at) VALUES (?, ?, ?, ?)',
-                        [snippetId, node.id, similarity, timestamp]
-                    );
-                    // Bi-directional? Usually yes for similarity.
-                    await database.execute(
-                        'INSERT OR IGNORE INTO semantic_edges (source_id, target_id, weight, created_at) VALUES (?, ?, ?, ?)',
-                        [node.id, snippetId, similarity, timestamp]
-                    );
-                }
-            }
+            const { satelliteEngine } = require('@/services/SatelliteInsertEngine');
+            satelliteEngine.processPostInsert(snippetId, embeddingRich);
         }
 
         return snippetId;
@@ -390,93 +363,8 @@ export async function getAllClusters(): Promise<any[]> {
 /**
  * 🔥 NEW: Comprehensive insertion with immediate edge calculation
  */
-export async function insertSnippetWithEdges(
-    content: string,
-    type: 'fact' | 'feeling' | 'goal',
-    embeddingRich: Float32Array,
-    embeddingFast?: Float32Array,
-    sentiment: 'analytical' | 'positive' | 'creative' | 'neutral' = 'neutral',
-    topic: string = 'misc',
-    x: number = Math.random() * 400 - 200,
-    y: number = Math.random() * 400 - 200,
-    z: number = 0
-): Promise<number> {
-    const database = getDb();
-    const timestamp = Date.now();
-    const importance = calculateInitialImportance(type);
+// 🚀 Legacy insertSnippetWithEdges removed. Use insertSnippet + SatelliteInsertEngine.
 
-    try {
-        // 1. Insert into main table
-        const result = await database.execute(
-            'INSERT INTO snippets (content, type, sentiment, topic, timestamp, x, y, z, importance) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [content, type, sentiment, topic, timestamp, x, y, z, importance]
-        );
-
-        const snippetId = result.insertId!;
-
-        // 2. Insert into vector tables
-        await database.execute(
-            'INSERT INTO vec_snippets (id, embedding) VALUES (?, ?)',
-            [snippetId, embeddingRich]
-        );
-
-        if (embeddingFast) {
-            await database.execute(
-                'INSERT INTO vec_snippets_fast (id, embedding) VALUES (?, ?)',
-                [snippetId, embeddingFast]
-            );
-        }
-
-        // 3. Find KNN neighbors (Top 10 similar)
-        const similarNodes = await findSimilarSnippets(embeddingRich, 10);
-        let connectionCount = 0;
-
-        for (const node of similarNodes) {
-            if (node.id === snippetId) continue;
-
-            const dist = (node as any).distance || 0;
-            const similarity = 1 - dist;
-
-            if (similarity > 0.5) {
-                await database.execute(
-                    'INSERT OR IGNORE INTO semantic_edges (source_id, target_id, weight, created_at) VALUES (?, ?, ?, ?)',
-                    [snippetId, node.id, similarity, timestamp]
-                );
-                await database.execute(
-                    'INSERT OR IGNORE INTO semantic_edges (source_id, target_id, weight, created_at) VALUES (?, ?, ?, ?)',
-                    [node.id, snippetId, similarity, timestamp]
-                );
-                connectionCount++;
-
-                // Update neighbor's connection count
-                await database.execute(
-                    'UPDATE snippets SET connection_count = connection_count + 1 WHERE id = ?',
-                    [node.id]
-                );
-            }
-        }
-
-        // 4. Update self connection count
-        await database.execute(
-            'UPDATE snippets SET connection_count = ? WHERE id = ?',
-            [connectionCount, snippetId]
-        );
-
-        return snippetId;
-    } catch (error) {
-        console.error('[DB] insertSnippetWithEdges failed:', error);
-        throw error;
-    }
-}
-
-/**
- * Helper: Calculate initial importance
- */
-function calculateInitialImportance(type: string): number {
-    const typeWeight = type === 'goal' ? 1.5 :
-        type === 'feeling' ? 1.2 : 1.0;
-    return typeWeight;
-}
 
 /**
  * 🔥 INSTANT: Load pre-computed graph

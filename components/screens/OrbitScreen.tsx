@@ -7,7 +7,7 @@ import { NeuralOrb } from '@/components/NeuralOrb';
 import { NeuralThinking } from '@/components/NeuralThinking';
 import { BurgerMenuButton, SideMenu } from '@/components/SideMenu';
 import { areKeysConfigured } from '@/config/api';
-import { findSimilarSnippets, initDatabase, insertSnippet } from '@/db';
+import { findSimilarSnippets, insertSnippet } from '@/db';
 import { useTTS } from '@/hooks/useTTS';
 import { useVoiceCapture } from '@/hooks/useVoiceCapture';
 import { processWithReasoning } from '@/services/deepseek';
@@ -21,6 +21,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
+    Dimensions,
     ScrollView,
     StyleSheet,
     Text,
@@ -28,7 +29,10 @@ import {
     View
 } from 'react-native';
 import Animated, {
+    Extrapolate,
     FadeInUp,
+    interpolate,
+    SharedValue,
     useAnimatedStyle,
     useSharedValue,
     withRepeat,
@@ -38,12 +42,15 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { IntelligenceService } from '@/services/intelligence';
 import * as Haptics from '@/utils/haptics';
 
 type AppState = 'idle' | 'listening' | 'processing' | 'speaking';
 
-export function OrbitScreen() {
+interface OrbitScreenProps {
+    layoutY?: SharedValue<number>;
+}
+
+export function OrbitScreen({ layoutY }: OrbitScreenProps) {
     const [appState, setAppState] = useState<AppState>('idle');
     const [isKeysConfigured, setIsKeysConfigured] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
@@ -93,17 +100,34 @@ export function OrbitScreen() {
 
     const scrollRef = useRef<ScrollView>(null);
     const insets = useSafeAreaInsets();
+    const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
-    // Initialize database and check API keys
+    // 🚀 SINGULARITY: The Orb reacts to the swipe towards Horizon (+layoutY)
+    const heroOrbStyle = useAnimatedStyle(() => {
+        if (!layoutY) return {};
+
+        // As layoutY goes from 0 to SCREEN_HEIGHT (Horizon Screen)
+        const scale = interpolate(
+            layoutY.value,
+            [0, SCREEN_HEIGHT],
+            [1, 15], // Radical zoom into the "Neural Matrix"
+            Extrapolate.CLAMP
+        );
+
+        const opacity = interpolate(
+            layoutY.value,
+            [0, SCREEN_HEIGHT * 0.5, SCREEN_HEIGHT],
+            [1, 0.8, 0], // Dissolve into the stars
+            Extrapolate.CLAMP
+        );
+
+        return {
+            transform: [{ scale }],
+            opacity,
+        };
+    });
     useEffect(() => {
         const init = async () => {
-            try {
-                await initDatabase();
-                console.log('[App] Database initialized');
-            } catch (error) {
-                console.error('[App] Database init failed:', error);
-            }
-
             const configured = await areKeysConfigured();
             setIsKeysConfigured(configured);
         };
@@ -220,10 +244,12 @@ export function OrbitScreen() {
             }
             setEmbedding(false);
 
-            // Trigger asynchronous community detection
-            IntelligenceService.runClustering().catch(e => console.error('[Intelligence] Clustering failed:', e));
+            // 🚀 HOLOGRAPHIC SYNC: Background processing (Clustering, Semantic Edges, Centroids)
+            // is handled automatically inside insertSnippet -> SatelliteInsertEngine.
+            console.log('[Neural Loop] Handing off to Satellite Engine via insertSnippet...');
 
             console.log('[Neural Loop] Step 5: Speaking...');
+
 
             Haptics.speaking();
             addAIResponse(finalResponse, finalReasoning);
@@ -299,13 +325,13 @@ export function OrbitScreen() {
                     /* Welcome Screen - Centered Layout */
                     <View style={styles.welcomeContainer}>
                         {/* Neural Orb - Visual Center */}
-                        <View style={styles.heroOrbWrapper}>
+                        <Animated.View style={[styles.heroOrbWrapper, heroOrbStyle]}>
                             <NeuralOrb
                                 intensity={tts.intensity}
                                 state={getOrbState()}
                                 size={200}
                             />
-                        </View>
+                        </Animated.View>
 
                         {/* Welcome Text */}
                         <Text style={styles.welcomeText}>

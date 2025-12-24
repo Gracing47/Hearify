@@ -41,7 +41,8 @@ export const SCHEMA = {
       importance REAL DEFAULT 1.0,
       connection_count INTEGER DEFAULT 0,
       last_accessed INTEGER,
-      cluster_id INTEGER
+      cluster_id INTEGER,
+      cluster_label TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_snippets_type ON snippets(type);
     CREATE INDEX IF NOT EXISTS idx_snippets_cluster ON snippets(cluster_id);
@@ -69,6 +70,8 @@ export const SCHEMA = {
       source_id INTEGER NOT NULL,
       target_id INTEGER NOT NULL,
       weight REAL NOT NULL,
+      edge_type TEXT DEFAULT 'weak',
+      visual_priority INTEGER DEFAULT 0,
       created_at INTEGER NOT NULL,
       FOREIGN KEY(source_id) REFERENCES snippets(id) ON DELETE CASCADE,
       FOREIGN KEY(target_id) REFERENCES snippets(id) ON DELETE CASCADE
@@ -85,7 +88,12 @@ export const SCHEMA = {
       x REAL NOT NULL,
       y REAL NOT NULL,
       z REAL NOT NULL,
+      radius REAL DEFAULT 100,
+      color TEXT,
       node_count INTEGER NOT NULL,
+      avg_importance REAL DEFAULT 1.0,
+      ai_label TEXT,
+      ai_summary TEXT,
       last_updated INTEGER NOT NULL
     );
   `,

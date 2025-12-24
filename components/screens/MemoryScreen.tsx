@@ -18,7 +18,14 @@ import {
     View
 } from 'react-native';
 import { Gesture, GestureDetector, ScrollView } from 'react-native-gesture-handler';
-import Animated, { FadeIn, FadeInUp, runOnJS, SharedValue, SlideInRight, useAnimatedScrollHandler } from 'react-native-reanimated';
+import Animated, {
+    FadeIn,
+    FadeInUp,
+    runOnJS,
+    SharedValue,
+    SlideInRight,
+    useAnimatedScrollHandler
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Sentiment color mapping
@@ -47,14 +54,18 @@ const AnimatedScrollView = Animated.createAnimatedComponent(ScrollView);
 interface MemoryScreenProps {
     scrollRef?: React.RefObject<any>;
     isAtTop?: SharedValue<boolean>;
+    layoutY?: SharedValue<number>;
 }
 
-export function MemoryScreen({ scrollRef, isAtTop }: MemoryScreenProps) {
+export function MemoryScreen({ scrollRef, isAtTop, layoutY }: MemoryScreenProps) {
     const insets = useSafeAreaInsets();
     const router = useRouter(); // Keeping router for now
     const [snippets, setSnippets] = useState<Snippet[]>([]);
     const [refreshing, setRefreshing] = useState(false);
     const [filter, setFilter] = useState<'all' | 'fact' | 'feeling' | 'goal'>('all');
+
+    // 🚀 HOLOGRAPHIC SYNC: Subscribe to node refresh trigger
+    const nodeRefreshTrigger = useContextStore(state => state.nodeRefreshTrigger);
 
     const loadSnippets = useCallback(async () => {
         const data = await getAllSnippets();
@@ -63,7 +74,8 @@ export function MemoryScreen({ scrollRef, isAtTop }: MemoryScreenProps) {
 
     useEffect(() => {
         loadSnippets();
-    }, []);
+    }, [nodeRefreshTrigger]); // 🔥 Re-run when nodes change
+
 
     const onRefresh = async () => {
         setRefreshing(true);

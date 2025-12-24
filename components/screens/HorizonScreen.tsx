@@ -4,6 +4,7 @@
 
 import { NeuralCanvas } from '@/components/NeuralCanvas';
 import { getAllSnippets } from '@/db';
+import { useContextStore } from '@/store/contextStore';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -11,6 +12,7 @@ import React, { useEffect, useState } from 'react';
 import { Platform, Pressable, StatusBar, StyleSheet, Text, View } from 'react-native';
 import Animated, {
     FadeIn,
+    SharedValue,
     SlideInDown,
     useAnimatedStyle,
     useSharedValue,
@@ -28,9 +30,13 @@ interface NodeStats {
     goals: number;
 }
 
-export function HorizonScreen() {
+interface HorizonScreenProps {
+    layoutY?: SharedValue<number>;
+}
+
+export function HorizonScreen({ layoutY }: HorizonScreenProps) {
     const insets = useSafeAreaInsets();
-    const router = useRouter();
+    const router = useRouter(); // Keeping router for now
     const [stats, setStats] = useState<NodeStats>({ total: 0, facts: 0, feelings: 0, goals: 0 });
     const [showHUD, setShowHUD] = useState(true);
     const [filterType, setFilterType] = useState<'all' | 'fact' | 'feeling' | 'goal'>('all');
@@ -49,7 +55,10 @@ export function HorizonScreen() {
         );
     }, []);
 
-    // Load stats
+    // 🚀 HOLOGRAPHIC SYNC: Subscribe to node refresh trigger
+    const nodeRefreshTrigger = useContextStore(state => state.nodeRefreshTrigger);
+
+    // Load stats - reactive to nodeRefreshTrigger
     useEffect(() => {
         const loadStats = async () => {
             const snippets = await getAllSnippets();
@@ -61,9 +70,8 @@ export function HorizonScreen() {
             });
         };
         loadStats();
-        const interval = setInterval(loadStats, 5000); // Refresh every 5s
-        return () => clearInterval(interval);
-    }, []);
+    }, [nodeRefreshTrigger]); // 🔥 Re-run when nodes change
+
 
     const pulseStyle = useAnimatedStyle(() => ({
         opacity: pulseOpacity.value,
@@ -79,7 +87,7 @@ export function HorizonScreen() {
             />
 
             {/* The Neural Canvas (Full Screen) */}
-            <NeuralCanvas filterType={filterType} />
+            <NeuralCanvas filterType={filterType} layoutY={layoutY} />
 
             <StatusBar hidden />
 
