@@ -5,6 +5,7 @@
 import { getAllSnippets } from '@/db';
 import { Snippet } from '@/db/schema';
 import { useContextStore } from '@/store/contextStore';
+import { updateChronicleScroll, useScrollCoordination } from '@/store/scrollCoordination';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
@@ -12,7 +13,6 @@ import React, { useCallback, useEffect, useState } from 'react';
 import {
     Platform,
     Pressable,
-    RefreshControl,
     StyleSheet,
     Text,
     View
@@ -52,12 +52,10 @@ const getTypeAccent = (type: string) => {
 const AnimatedScrollView = Animated.createAnimatedComponent(ScrollView);
 
 interface MemoryScreenProps {
-    scrollRef?: React.RefObject<any>;
-    isAtTop?: SharedValue<boolean>;
     layoutY?: SharedValue<number>;
 }
 
-export function MemoryScreen({ scrollRef, isAtTop, layoutY }: MemoryScreenProps) {
+export function MemoryScreen({ layoutY }: MemoryScreenProps) {
     const insets = useSafeAreaInsets();
     const router = useRouter(); // Keeping router for now
     const [snippets, setSnippets] = useState<Snippet[]>([]);
@@ -83,11 +81,15 @@ export function MemoryScreen({ scrollRef, isAtTop, layoutY }: MemoryScreenProps)
         setRefreshing(false);
     };
 
+    // Scroll coordination - direct SharedValue update (zero latency)
+    const { chronicleScrollRef } = useScrollCoordination();
+
     const scrollHandler = useAnimatedScrollHandler({
         onScroll: (event) => {
-            if (isAtTop) {
-                isAtTop.value = event.contentOffset.y <= 0;
-            }
+            'worklet';
+            const { contentOffset, contentSize, layoutMeasurement } = event;
+            // Direct SharedValue update - no runOnJS needed
+            updateChronicleScroll(contentOffset.y, contentSize.height, layoutMeasurement.height);
         },
     });
 
@@ -111,27 +113,31 @@ export function MemoryScreen({ scrollRef, isAtTop, layoutY }: MemoryScreenProps)
             />
 
             <AnimatedScrollView
-                ref={scrollRef}
+                ref={chronicleScrollRef}
                 style={styles.scroll}
                 contentContainerStyle={[
                     styles.scrollContent,
                     { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 100 }
                 ]}
                 showsVerticalScrollIndicator={false}
-                refreshControl={
-                    <RefreshControl
-                        refreshing={refreshing}
-                        onRefresh={onRefresh}
-                        tintColor="#6366f1"
-                    />
-                }
+                bounces={false}
+                overScrollMode="never"
                 onScroll={scrollHandler}
                 scrollEventThrottle={16}
             >
-                {/* Header */}
+                {/* Header with Refresh */}
                 <Animated.View entering={FadeIn} style={styles.header}>
-                    <Text style={styles.title}>Chronicle</Text>
-                    <Text style={styles.subtitle}>Your Neural Memory Archive</Text>
+                    <View>
+                        <Text style={styles.title}>Chronicle</Text>
+                        <Text style={styles.subtitle}>Your Neural Memory Archive</Text>
+                    </View>
+                    <Pressable
+                        onPress={onRefresh}
+                        style={styles.refreshBtn}
+                        hitSlop={12}
+                    >
+                        <Text style={styles.refreshIcon}>{refreshing ? '⏳' : '↻'}</Text>
+                    </Pressable>
                 </Animated.View>
 
                 {/* Stats Banner */}
@@ -226,6 +232,11 @@ interface MemoryCardProps {
     onShowInHorizon: () => void;
 }
 
+// Helper function to switch to orbit screen (for runOnJS)
+const switchToOrbit = () => {
+    useContextStore.getState().setActiveScreen('orbit');
+};
+
 function MemoryCard({ snippet, index, isLarge, onShowInHorizon }: MemoryCardProps) {
     const accent = getTypeAccent(snippet.type);
     const sentimentColor = getSentimentColor(snippet.sentiment);
@@ -234,11 +245,10 @@ function MemoryCard({ snippet, index, isLarge, onShowInHorizon }: MemoryCardProp
 
     const panGesture = Gesture.Pan()
         .onEnd((e) => {
+            'worklet';
             // Swipe UP = Throw to Orbit
             if (e.translationY < -150 && e.velocityY < -500) {
-                runOnJS(() => {
-                    useContextStore.getState().setActiveScreen('orbit');
-                })();
+                runOnJS(switchToOrbit)();
             }
         });
 
@@ -310,6 +320,9 @@ const styles = StyleSheet.create({
     // Header
     header: {
         marginBottom: 24,
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
     },
     title: {
         fontSize: 32,
@@ -322,6 +335,13 @@ const styles = StyleSheet.create({
         color: '#666',
         marginTop: 4,
         fontWeight: '500',
+    },
+    refreshBtn: {
+        padding: 8,
+    },
+    refreshIcon: {
+        fontSize: 20,
+        color: 'rgba(255, 255, 255, 0.4)',
     },
     // Stats Banner
     statsBanner: {

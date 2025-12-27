@@ -25,6 +25,7 @@ import {
 
 import { getAllClusters, getAllEdges, getDb, isDatabaseReady } from '../db';
 import { Snippet } from '../db/schema';
+import { useCTC } from '../store/CognitiveTempoController';
 import { useContextStore } from '../store/contextStore';
 import { FilmGrainOverlay } from './visuals/FilmGrain';
 
@@ -96,6 +97,19 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
     // 4. Trinity Sync Subscription
     const nodeRefreshTrigger = useContextStore((state) => state.nodeRefreshTrigger);
     const activeFocusNodeId = useContextStore((state) => state.focusNodeId);
+
+    // 5. CTC Limits (Cognitive Tempo Control)
+    const ctcMaxVelocity = useSharedValue(30);
+    const ctcBloomCap = useSharedValue(1.0);
+    const ctcEdgeActivity = useSharedValue(1);
+
+    // Sync CTC limits to shared values
+    const ctcLimits = useCTC(state => state.limits);
+    useEffect(() => {
+        ctcMaxVelocity.value = ctcLimits.maxVelocity;
+        ctcBloomCap.value = ctcLimits.bloomIntensityCap;
+        ctcEdgeActivity.value = ctcLimits.edgeActivityLevel;
+    }, [ctcLimits]);
 
     // --- DATA BOOTSTRAP (SpaceX Pre-Flight) ---
     useEffect(() => {
@@ -188,11 +202,12 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
             vX[i] = (vX[i] + fx) * friction;
             vY[i] = (vY[i] + fy) * friction;
 
-            // Velocity clamp for stability
+            // Velocity clamp for stability (CTC-governed)
+            const maxV = ctcMaxVelocity.value;
             const v = Math.sqrt(vX[i] * vX[i] + vY[i] * vY[i]);
-            if (v > 30) {
-                vX[i] = (vX[i] / v) * 30;
-                vY[i] = (vY[i] / v) * 30;
+            if (v > maxV) {
+                vX[i] = (vX[i] / v) * maxV;
+                vY[i] = (vY[i] / v) * maxV;
             }
 
             curX[i] += vX[i] * delta * 60;
@@ -217,21 +232,46 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
         u_focusIntensity: 1.0
     }));
 
-    // --- GESTURES (Kinematic Grammar) ---
+    // --- GESTURES (Kinematic Grammar + CTC Governance) ---
+    const ctcAllowTranslation = useSharedValue(true);
+
+    // Sync CTC translation permission
+    useEffect(() => {
+        ctcAllowTranslation.value = ctcLimits.allowCameraTranslation;
+    }, [ctcLimits]);
+
     const gesture = Gesture.Simultaneous(
-        Gesture.Pan().onChange(e => {
-            'worklet';
-            translateX.value += e.changeX / scale.value;
-            translateY.value += e.changeY / scale.value;
-            // Shift focus inversely for parallax feel
-            rawFocusX.value -= e.changeX * 0.3;
-            rawFocusY.value -= e.changeY * 0.3;
-        }),
+        Gesture.Pan()
+            .onStart(() => {
+                'worklet';
+                // CTC Touch on gesture start (runOnJS not needed - we'll use effect)
+            })
+            .onChange(e => {
+                'worklet';
+                // Phase A1: Camera Governance - only translate if CTC allows
+                if (!ctcAllowTranslation.value) {
+                    // AWARENESS mode: only allow rotation-like subtle drift
+                    rawFocusX.value -= e.changeX * 0.1;
+                    rawFocusY.value -= e.changeY * 0.1;
+                    return;
+                }
+
+                translateX.value += e.changeX / scale.value;
+                translateY.value += e.changeY / scale.value;
+                // Shift focus inversely for parallax feel
+                rawFocusX.value -= e.changeX * 0.3;
+                rawFocusY.value -= e.changeY * 0.3;
+            }),
         Gesture.Pinch().onChange(e => {
             'worklet';
             scale.value = Math.min(2.0, Math.max(0.2, scale.value * e.scaleChange));
         })
     );
+
+    // CTC touch on any gesture (runs on JS thread)
+    const handleGestureStart = () => {
+        useCTC.getState().touch();
+    };
 
     if (isLoading) return (
         <View style={styles.loader}>
@@ -257,7 +297,7 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
                     <Group transform={canvasTransform}>
                         {/* Semantic Edges */}
                         {edgePairs.map(([s, t], idx) => (
-                            <NeuralEdge key={idx} s={s} t={t} nodes={nodes} posX={posX} posY={posY} time={time} />
+                            <NeuralEdge key={idx} s={s} t={t} nodes={nodes} posX={posX} posY={posY} time={time} edgeActivityLevel={ctcEdgeActivity} />
                         ))}
 
                         {/* Neural Nodes */}
@@ -289,14 +329,31 @@ const TYPE_COLORS: Record<string, string> = {
     goal: '#fde047',    // Gold
 };
 
-const NeuralEdge = ({ s, t, nodes, posX, posY, time }: any) => {
+// Phase A3: Edge Activity States
+type EdgeState = 'DORMANT' | 'BREATHING' | 'ACTIVE';
+
+const NeuralEdge = ({ s, t, nodes, posX, posY, time, edgeActivityLevel }: any) => {
     const sIdx = useMemo(() => nodes.findIndex((n: any) => n.id === s), [nodes, s]);
     const tIdx = useMemo(() => nodes.findIndex((n: any) => n.id === t), [nodes, t]);
 
     const p1 = useDerivedValue(() => ({ x: posX.value[sIdx] ?? 0, y: posY.value[sIdx] ?? 0 }));
     const p2 = useDerivedValue(() => ({ x: posX.value[tIdx] ?? 0, y: posY.value[tIdx] ?? 0 }));
 
-    const opacity = useDerivedValue(() => 0.08 + Math.sin(time.value * 2) * 0.02);
+    // Phase A3: Edge opacity based on CTC activity level
+    const opacity = useDerivedValue(() => {
+        const level = edgeActivityLevel?.value ?? 1;
+
+        if (level === 0) {
+            // DORMANT: Nearly invisible
+            return 0.03;
+        } else if (level === 1) {
+            // BREATHING: Subtle pulse
+            return 0.06 + Math.sin(time.value * 1.5) * 0.02;
+        } else {
+            // ACTIVE: Full visibility with pulse
+            return 0.12 + Math.sin(time.value * 3) * 0.04;
+        }
+    });
 
     if (sIdx === -1 || tIdx === -1) return null;
 

@@ -1,20 +1,20 @@
 /**
- * 🌅 DeltaCard — Morning Reflection Display
+ * 🌅 DeltaCard — Gentle Reflection Guide
  * 
- * Glassmorphic card showing daily AI-generated summaries
+ * Minimal, non-intrusive daily summary card.
+ * Appears subtly during reflection windows (lunch/evening).
  */
 
 import { BlurView } from 'expo-blur';
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import Animated, { FadeInDown, FadeOutUp } from 'react-native-reanimated';
+import Animated, { FadeIn, FadeOut } from 'react-native-reanimated';
 
 import { DailyDelta } from '../services/DeltaService';
 
 interface DeltaCardProps {
     delta: DailyDelta;
     onDismiss?: () => void;
-    onDiveDeeper?: () => void;
 }
 
 const MOOD_EMOJI: Record<string, string> = {
@@ -24,208 +24,105 @@ const MOOD_EMOJI: Record<string, string> = {
     mixed: '🌈'
 };
 
-const MOOD_COLORS: Record<string, string> = {
-    analytical: '#22d3ee',
-    reflective: '#a78bfa',
-    creative: '#fde047',
-    mixed: '#f472b6'
-};
+export const DeltaCard = ({ delta, onDismiss }: DeltaCardProps) => {
+    const moodEmoji = MOOD_EMOJI[delta.mood] || '💭';
 
-export const DeltaCard = ({ delta, onDismiss, onDiveDeeper }: DeltaCardProps) => {
-    const moodEmoji = MOOD_EMOJI[delta.mood] || '🌈';
-    const moodColor = MOOD_COLORS[delta.mood] || '#818cf8';
-
-    const formattedDate = formatDisplayDate(delta.date);
+    // Show only first 2 highlights
+    const highlights = delta.highlights.slice(0, 2);
 
     return (
         <Animated.View
-            entering={FadeInDown.springify().damping(15)}
-            exiting={FadeOutUp.duration(200)}
+            entering={FadeIn.delay(500).duration(600)}
+            exiting={FadeOut.duration(300)}
             style={styles.container}
         >
-            <BlurView intensity={40} tint="dark" style={styles.blur}>
-                {/* Header */}
+            <BlurView intensity={30} tint="dark" style={styles.blur}>
+                {/* Compact Header */}
                 <View style={styles.header}>
                     <Text style={styles.emoji}>{moodEmoji}</Text>
                     <View style={styles.headerText}>
-                        <Text style={styles.title}>Daily Delta</Text>
-                        <Text style={styles.date}>{formattedDate}</Text>
+                        <Text style={styles.greeting}>Yesterday's reflection</Text>
                     </View>
-                    <View style={[styles.moodBadge, { backgroundColor: moodColor + '20' }]}>
-                        <Text style={[styles.moodText, { color: moodColor }]}>
-                            {delta.mood.toUpperCase()}
-                        </Text>
-                    </View>
+                    <Pressable onPress={onDismiss} hitSlop={12}>
+                        <Text style={styles.closeBtn}>✕</Text>
+                    </Pressable>
                 </View>
 
-                {/* Summary */}
-                <Text style={styles.summary}>{delta.summary}</Text>
+                {/* Summary - One line max */}
+                <Text style={styles.summary} numberOfLines={2}>
+                    {delta.summary}
+                </Text>
 
-                {/* Highlights */}
-                {delta.highlights.length > 0 && (
-                    <View style={styles.highlightsContainer}>
-                        {delta.highlights.map((h, idx) => (
-                            <View key={idx} style={styles.highlightChip}>
-                                <Text style={styles.highlightText}>{h}</Text>
-                            </View>
+                {/* Compact Highlights */}
+                {highlights.length > 0 && (
+                    <View style={styles.highlights}>
+                        {highlights.map((h, idx) => (
+                            <Text key={idx} style={styles.highlight}>• {h}</Text>
                         ))}
                     </View>
                 )}
 
-                {/* Stats */}
-                <View style={styles.stats}>
-                    <Text style={styles.statText}>
-                        {delta.nodeCount} thoughts captured
-                    </Text>
-                    {delta.topClusters.length > 0 && (
-                        <Text style={styles.statText}>
-                            • {delta.topClusters.slice(0, 2).join(', ')}
-                        </Text>
-                    )}
-                </View>
-
-                {/* Actions */}
-                <View style={styles.actions}>
-                    {onDismiss && (
-                        <Pressable style={styles.dismissBtn} onPress={onDismiss}>
-                            <Text style={styles.dismissText}>Dismiss</Text>
-                        </Pressable>
-                    )}
-                    {onDiveDeeper && (
-                        <Pressable style={styles.diveBtn} onPress={onDiveDeeper}>
-                            <Text style={styles.diveText}>Dive Deeper →</Text>
-                        </Pressable>
-                    )}
-                </View>
+                {/* Subtle Stats */}
+                <Text style={styles.stat}>
+                    {delta.nodeCount} thoughts captured
+                </Text>
             </BlurView>
         </Animated.View>
     );
 };
 
-function formatDisplayDate(dateStr: string): string {
-    const date = new Date(dateStr);
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-
-    const targetDate = new Date(dateStr);
-    targetDate.setHours(0, 0, 0, 0);
-
-    if (targetDate.getTime() === yesterday.getTime()) {
-        return 'Yesterday';
-    }
-
-    return date.toLocaleDateString('en-US', {
-        weekday: 'long',
-        month: 'short',
-        day: 'numeric'
-    });
-}
-
 const styles = StyleSheet.create({
     container: {
-        marginHorizontal: 16,
-        marginVertical: 12,
-        borderRadius: 24,
+        marginHorizontal: 20,
+        marginTop: 8,
+        marginBottom: 16,
+        borderRadius: 16,
         overflow: 'hidden',
         borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.1)',
+        borderColor: 'rgba(255, 255, 255, 0.06)',
     },
     blur: {
-        padding: 20,
+        padding: 16,
     },
     header: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 16,
+        marginBottom: 10,
     },
     emoji: {
-        fontSize: 32,
-        marginRight: 12,
+        fontSize: 20,
+        marginRight: 10,
     },
     headerText: {
         flex: 1,
     },
-    title: {
-        fontSize: 18,
-        fontWeight: '800',
-        color: '#fff',
-        letterSpacing: 0.5,
+    greeting: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: 'rgba(255, 255, 255, 0.6)',
+        letterSpacing: 0.3,
     },
-    date: {
-        fontSize: 12,
-        color: 'rgba(255, 255, 255, 0.5)',
-        marginTop: 2,
-    },
-    moodBadge: {
-        paddingHorizontal: 10,
-        paddingVertical: 4,
-        borderRadius: 12,
-    },
-    moodText: {
-        fontSize: 10,
-        fontWeight: '700',
-        letterSpacing: 1,
+    closeBtn: {
+        fontSize: 14,
+        color: 'rgba(255, 255, 255, 0.3)',
+        padding: 4,
     },
     summary: {
-        fontSize: 15,
-        color: 'rgba(255, 255, 255, 0.9)',
-        lineHeight: 22,
-        marginBottom: 16,
+        fontSize: 14,
+        color: 'rgba(255, 255, 255, 0.85)',
+        lineHeight: 20,
+        marginBottom: 10,
     },
-    highlightsContainer: {
-        flexDirection: 'row',
-        flexWrap: 'wrap',
-        gap: 8,
-        marginBottom: 16,
+    highlights: {
+        marginBottom: 8,
     },
-    highlightChip: {
-        backgroundColor: 'rgba(99, 102, 241, 0.2)',
-        paddingHorizontal: 12,
-        paddingVertical: 6,
-        borderRadius: 16,
-        borderWidth: 1,
-        borderColor: 'rgba(99, 102, 241, 0.3)',
-    },
-    highlightText: {
+    highlight: {
         fontSize: 12,
-        color: '#a5b4fc',
-        fontWeight: '600',
+        color: 'rgba(165, 180, 252, 0.8)',
+        marginBottom: 3,
     },
-    stats: {
-        flexDirection: 'row',
-        gap: 8,
-        marginBottom: 16,
-    },
-    statText: {
+    stat: {
         fontSize: 11,
-        color: 'rgba(255, 255, 255, 0.4)',
-    },
-    actions: {
-        flexDirection: 'row',
-        justifyContent: 'flex-end',
-        gap: 12,
-    },
-    dismissBtn: {
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-    },
-    dismissText: {
-        color: 'rgba(255, 255, 255, 0.5)',
-        fontSize: 14,
-        fontWeight: '600',
-    },
-    diveBtn: {
-        backgroundColor: 'rgba(99, 102, 241, 0.3)',
-        paddingHorizontal: 20,
-        paddingVertical: 10,
-        borderRadius: 20,
-    },
-    diveText: {
-        color: '#a5b4fc',
-        fontSize: 14,
-        fontWeight: '700',
+        color: 'rgba(255, 255, 255, 0.3)',
     },
 });

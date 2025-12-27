@@ -19,22 +19,25 @@ import { generateEmbedding, generateEmbeddings } from '@/services/openai';
 import { useContextStore } from '@/store/contextStore';
 import { useConversationStore } from '@/store/conversation';
 import { useProfileStore } from '@/store/profile';
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { updateOrbitScroll, useScrollCoordination } from '@/store/scrollCoordination';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
     Dimensions,
-    ScrollView,
+    Pressable,
     StyleSheet,
     Text,
     TouchableOpacity,
     View
 } from 'react-native';
+import { ScrollView } from 'react-native-gesture-handler';
 import Animated, {
     Extrapolate,
     FadeInUp,
     interpolate,
     SharedValue,
+    useAnimatedScrollHandler,
     useAnimatedStyle,
     useSharedValue,
     withRepeat,
@@ -50,9 +53,10 @@ type AppState = 'idle' | 'listening' | 'processing' | 'speaking';
 
 interface OrbitScreenProps {
     layoutY?: SharedValue<number>;
+    onOpenChronicle?: () => void;
 }
 
-export function OrbitScreen({ layoutY }: OrbitScreenProps) {
+export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     const [appState, setAppState] = useState<AppState>('idle');
     const [isKeysConfigured, setIsKeysConfigured] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
@@ -102,7 +106,19 @@ export function OrbitScreen({ layoutY }: OrbitScreenProps) {
         transform: [{ scale: recordButtonScale.value }],
     }));
 
-    const scrollRef = useRef<ScrollView>(null);
+    // Scroll coordination for pager handoff
+    const { orbitScrollRef } = useScrollCoordination();
+    const AnimatedScrollView = Animated.createAnimatedComponent(ScrollView);
+
+    const orbitScrollHandler = useAnimatedScrollHandler({
+        onScroll: (event) => {
+            'worklet';
+            const { contentOffset, contentSize, layoutMeasurement } = event;
+            // Direct SharedValue update - zero latency, no runOnJS needed
+            updateOrbitScroll(contentOffset.y, contentSize.height, layoutMeasurement.height);
+        },
+    });
+
     const insets = useSafeAreaInsets();
     const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -138,22 +154,39 @@ export function OrbitScreen({ layoutY }: OrbitScreenProps) {
         init();
     }, []);
 
-    // Fetch yesterday's Daily Delta
+    // Fetch yesterday's Daily Delta - Only show at appropriate times (lunch/evening)
     useEffect(() => {
         const fetchDelta = async () => {
             try {
+                const hour = new Date().getHours();
+
+                // Only show Delta during reflection windows:
+                // - Lunch: 12:00 - 14:00
+                // - Evening: 18:00 - 21:00
+                const isReflectionTime = (hour >= 12 && hour <= 14) || (hour >= 18 && hour <= 21);
+
+                if (!isReflectionTime) {
+                    // Not the right time - skip silently
+                    return;
+                }
+
                 const yesterday = new Date();
                 yesterday.setDate(yesterday.getDate() - 1);
                 let delta = await getDeltaForDate(yesterday);
 
-                // If no delta exists, try to generate one
-                if (!delta) {
+                // Only generate if we're in the window and none exists
+                if (!delta && isReflectionTime) {
                     delta = await generateYesterdayDelta();
                 }
 
-                setDailyDelta(delta);
+                // Small delay so it doesn't feel pushy
+                setTimeout(() => {
+                    setDailyDelta(delta);
+                }, 2000);
+
             } catch (e) {
-                console.warn('[OrbitScreen] Delta fetch failed:', e);
+                // Fail silently - Delta is not critical
+                console.debug('[OrbitScreen] Delta skipped:', e);
             }
         };
         fetchDelta();
@@ -312,7 +345,7 @@ export function OrbitScreen({ layoutY }: OrbitScreenProps) {
     // Auto-scroll to bottom on new messages
     useEffect(() => {
         setTimeout(() => {
-            scrollRef.current?.scrollToEnd({ animated: true });
+            orbitScrollRef.current?.scrollToEnd({ animated: true });
         }, 100);
     }, [messages]);
 
@@ -339,10 +372,10 @@ export function OrbitScreen({ layoutY }: OrbitScreenProps) {
                 <View style={styles.header}>
                     <BurgerMenuButton onPress={() => setMenuOpen(true)} />
                     <Text style={styles.headerTitle}>Orbit</Text>
-                    <View style={styles.statusPill}>
-                        <View style={styles.statusDot} />
-                        <Text style={styles.statusText}>R1</Text>
-                    </View>
+                    <Pressable style={styles.chronicleButton} onPress={onOpenChronicle}>
+                        <Text style={styles.chronicleIcon}>📜</Text>
+                        <Text style={styles.chronicleText}>Chronicle</Text>
+                    </Pressable>
                 </View>
 
                 {/* Main Content Area */}
@@ -377,12 +410,14 @@ export function OrbitScreen({ layoutY }: OrbitScreenProps) {
                     </View>
                 ) : (
                     /* Scrollable Messages */
-                    <ScrollView
-                        ref={scrollRef}
+                    <AnimatedScrollView
+                        ref={orbitScrollRef}
                         style={styles.messageList}
                         contentContainerStyle={styles.messageListContent}
                         showsVerticalScrollIndicator={false}
-                        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
+                        onScroll={orbitScrollHandler}
+                        scrollEventThrottle={16}
+                        onContentSizeChange={() => orbitScrollRef.current?.scrollToEnd({ animated: true })}
                     >
                         {messages.map((msg, idx) => (
                             <Animated.View
@@ -416,7 +451,7 @@ export function OrbitScreen({ layoutY }: OrbitScreenProps) {
                                 </View>
                             </Animated.View>
                         )}
-                    </ScrollView>
+                    </AnimatedScrollView>
                 )}
 
                 {/* Floating Input Bar (Antigravity HUD) */}
@@ -479,28 +514,25 @@ const styles = StyleSheet.create({
         paddingHorizontal: 20,
         paddingVertical: 12,
     },
-    statusPill: {
+    chronicleButton: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: 'rgba(16, 185, 129, 0.1)',
+        backgroundColor: 'rgba(99, 102, 241, 0.15)',
         borderRadius: 12,
-        paddingHorizontal: 10,
+        paddingHorizontal: 12,
         paddingVertical: 6,
         borderWidth: 1,
-        borderColor: 'rgba(16, 185, 129, 0.3)',
+        borderColor: 'rgba(99, 102, 241, 0.3)',
+        gap: 6,
     },
-    statusDot: {
-        width: 6,
-        height: 6,
-        borderRadius: 3,
-        backgroundColor: '#10b981',
-        marginRight: 6,
+    chronicleIcon: {
+        fontSize: 14,
     },
-    statusText: {
-        fontSize: 10,
-        fontWeight: '700',
-        color: '#10b981',
-        letterSpacing: 1,
+    chronicleText: {
+        fontSize: 11,
+        fontWeight: '600',
+        color: '#818cf8',
+        letterSpacing: 0.5,
     },
     headerTitle: {
         fontSize: 18,

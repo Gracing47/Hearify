@@ -146,7 +146,8 @@ export const SCHEMA = {
     `ALTER TABLE snippets ADD COLUMN z REAL DEFAULT 0;`,
     `ALTER TABLE snippets ADD COLUMN importance REAL DEFAULT 1.0;`,
     `ALTER TABLE snippets ADD COLUMN connection_count INTEGER DEFAULT 0;`,
-    `ALTER TABLE snippets ADD COLUMN last_accessed INTEGER;`
+    `ALTER TABLE snippets ADD COLUMN last_accessed INTEGER;`,
+    `ALTER TABLE snippets ADD COLUMN cluster_label TEXT;`
   ]
 };
 

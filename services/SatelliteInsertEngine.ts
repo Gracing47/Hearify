@@ -1,9 +1,10 @@
 import { findSimilarSnippets, getDb } from '@/db';
+import { useCTC } from '@/store/CognitiveTempoController';
 import { useContextStore } from '@/store/contextStore';
 import { useMissionControl } from '@/store/missionControl';
 import { IntelligenceService } from './intelligence';
 
-// ... (rest of imports remains same)
+// Birth energy is modulated by CTC state
 
 // Simple native queue to avoid ESM issues with p-queue
 class SimpleQueue {
@@ -40,15 +41,19 @@ class SatelliteInsertEngine {
     async processPostInsert(snippetId: number, embeddingRich: Float32Array) {
         const startTime = Date.now();
 
+        // Phase A2: Calculate birth energy from CTC state
+        const ctcLimits = useCTC.getState().limits;
+        const birthEnergyMultiplier = ctcLimits.birthEnergyMultiplier;
+
         // Queue background operations
         this.insertQueue.add(() => this.computeSemanticEdges(snippetId, embeddingRich));
         this.insertQueue.add(() => this.updateClusterCentroids(snippetId));
         this.insertQueue.add(() => IntelligenceService.runClustering());
 
-        // After processing, trigger Horizon refresh
+        // After processing, trigger Horizon refresh with birth energy
         setTimeout(() => {
             const duration = Date.now() - startTime;
-            console.log(`[Satellite] Pipeline complete for node ${snippetId}: ${duration}ms`);
+            console.log(`[Satellite] Pipeline complete for node ${snippetId}: ${duration}ms (birth energy: ${birthEnergyMultiplier.toFixed(2)})`);
 
             try {
                 // 🚀 HOLOGRAPHIC SYNC: Trigger Horizon to reload nodes
