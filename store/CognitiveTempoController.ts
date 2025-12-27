@@ -51,7 +51,7 @@ const MODE_CONFIGS: Record<CognitiveMode, CTCLimits> = {
         birthEnergyMultiplier: 0,
     },
     AWARENESS: {
-        allowCameraTranslation: false,
+        allowCameraTranslation: true, // 🔥 Allow exploration on touch
         allowCameraRotation: true,
         maxVelocity: 10,
         edgeActivityLevel: 0,

@@ -96,12 +96,6 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
     // 4. Trinity Sync Subscription
     const nodeRefreshTrigger = useContextStore((state) => state.nodeRefreshTrigger);
     const activeFocusNodeId = useContextStore((state) => state.focusNodeId);
-    const liveFocusTarget = useContextStore((state) => state.liveFocusTarget);
-
-    // 5. Pre-Cognition Camera Drift Target
-    const driftTargetX = useSharedValue(0);
-    const driftTargetY = useSharedValue(0);
-    const driftConfidence = useSharedValue(0);
 
     // 5. CTC Limits (Cognitive Tempo Control)
     const ctcMaxVelocity = useSharedValue(30);
@@ -115,15 +109,6 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
         ctcBloomCap.value = ctcLimits.bloomIntensityCap;
         ctcEdgeActivity.value = ctcLimits.edgeActivityLevel;
     }, [ctcLimits]);
-
-    // 🚀 PRE-COGNITION: Sync live focus target to shared values
-    useEffect(() => {
-        if (liveFocusTarget) {
-            driftTargetX.value = liveFocusTarget.x;
-            driftTargetY.value = liveFocusTarget.y;
-            driftConfidence.value = liveFocusTarget.confidence;
-        }
-    }, [liveFocusTarget]);
 
     // --- DATA BOOTSTRAP (SpaceX Pre-Flight) ---
     useEffect(() => {
@@ -139,18 +124,38 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
 
             const [edges, cls] = await Promise.all([getAllEdges(), getAllClusters()]);
 
-            // Initialize Physics Arrays
+            // 🏠 ORBITAL CONSTELLATION: Nodes arranged in stable orbital rings
             const newPosX = new Float32Array(500);
             const newPosY = new Float32Array(500);
-            const newVelX = new Float32Array(500);
-            const newVelY = new Float32Array(500);
+            const newVelX = new Float32Array(500); // Now stores orbital angle
+            const newVelY = new Float32Array(500); // Now stores orbital radius
             const newCIds = new Int32Array(500).fill(-1);
 
+            // Calculate orbital parameters for each node
+            const numNodes = snips.length;
+            const goldenAngle = Math.PI * (3 - Math.sqrt(5)); // 137.5° - creates beautiful spiral
+
             snips.forEach((s, i) => {
-                newPosX[i] = (Math.random() - 0.5) * 400;
-                newPosY[i] = (Math.random() - 0.5) * 400;
-                newVelX[i] = (Math.random() - 0.5) * 20;
-                newVelY[i] = (Math.random() - 0.5) * 20;
+                // � GOLDEN SPIRAL PLACEMENT: Creates natural, balanced distribution
+                const angle = i * goldenAngle;
+                const radiusFactor = Math.sqrt(i + 1) / Math.sqrt(numNodes + 1);
+                const baseRadius = 80 + radiusFactor * 350; // Inner: 80px, Outer: 430px
+
+                // Add slight randomness for organic feel
+                const radiusJitter = (Math.random() - 0.5) * 30;
+                const angleJitter = (Math.random() - 0.5) * 0.2;
+
+                const finalRadius = baseRadius + radiusJitter;
+                const finalAngle = angle + angleJitter;
+
+                // Set initial position on orbital path
+                newPosX[i] = Math.cos(finalAngle) * finalRadius;
+                newPosY[i] = Math.sin(finalAngle) * finalRadius;
+
+                // Store orbital parameters (angle, radius) for smooth orbital motion
+                newVelX[i] = finalAngle; // Current orbital angle
+                newVelY[i] = finalRadius; // Orbital radius
+
                 newCIds[i] = s.cluster_id || -1;
             });
 
@@ -169,71 +174,56 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
         bootstrap();
     }, [nodeRefreshTrigger]);
 
-    // --- RAPTOR PHYSICS LOOP (The Governor) ---
+    // --- 🏠 ORBITAL CONSTELLATION PHYSICS (Home-like Calm) ---
     useFrameCallback((info) => {
         'worklet';
-        const delta = (info.timeSinceFirstFrame || 16.6) / 1000;
         time.value = (info.timestamp || 0) / 1000;
         const n = nodeCount.value;
         if (n === 0) return;
 
-        const friction = 0.92;
-        const repulsion = 1200;
-        const centerGravity = 0.015;
-        const alpha = 0.08; // EWMA Focus Smoothing
+        // 🌊 ULTRA-SLOW orbital drift - like stars gently rotating
+        const baseOrbitalSpeed = 0.008; // Very slow rotation (full orbit ~13 minutes)
+        const t = time.value;
 
-        // Stabilize Focus Vector (EWMA)
+        // Stabilize Focus Vector (EWMA) - for subtle attraction to camera focus
+        const alpha = 0.02; // Even smoother stabilization
         stableFocusX.value = Number(stableFocusX.value) + (Number(rawFocusX.value) - Number(stableFocusX.value)) * alpha;
         stableFocusY.value = Number(stableFocusY.value) + (Number(rawFocusY.value) - Number(stableFocusY.value)) * alpha;
 
-        // 🚀 PRE-COGNITION: Gentle camera drift towards live focus target
-        // Only drift if confidence is high and user isn't actively panning
-        const driftAlpha = 0.02; // Very gentle (subliminal)
-        if (driftConfidence.value > 0.7) {
-            translateX.value += (driftTargetX.value - translateX.value) * driftAlpha;
-            translateY.value += (driftTargetY.value - translateY.value) * driftAlpha;
-        }
-
         const curX = posX.value;
         const curY = posY.value;
-        const vX = velX.value;
-        const vY = velY.value;
+        const angles = velX.value;  // Orbital angles
+        const radii = velY.value;   // Orbital radii
 
         for (let i = 0; i < n; i++) {
-            let fx = 0;
-            let fy = 0;
+            // 🌀 ORBITAL MOTION: Each node orbits at its own radius
+            // Inner nodes orbit slightly faster (Kepler-like)
+            const radiusFactor = radii[i] / 400; // 0 to 1
+            const orbitalSpeed = baseOrbitalSpeed * (1.2 - radiusFactor * 0.5); // Inner: faster, Outer: slower
 
-            // 1. Central Focus Gravity
-            fx += (stableFocusX.value - curX[i]) * centerGravity;
-            fy += (stableFocusY.value - curY[i]) * centerGravity;
+            // Update orbital angle
+            angles[i] += orbitalSpeed;
 
-            // 2. Fast Repulsion (McKinsey Clarity Culling)
-            for (let j = 0; j < n; j++) {
-                if (i === j) continue;
-                const dx = curX[i] - curX[j];
-                const dy = curY[i] - curY[j];
-                const dSq = dx * dx + dy * dy + 100;
-                if (dSq < 20000) { // Culling: only calculate nearby nodes
-                    const f = repulsion / dSq;
-                    fx += dx * f;
-                    fy += dy * f;
-                }
-            }
+            // 🌊 BREATHING RADIUS: Orbit expands/contracts gently
+            const breathingPhase = t * 0.1 + i * 0.5; // Very slow breathing
+            const breathingAmplitude = 8; // Subtle 8px expansion
+            const currentRadius = radii[i] + Math.sin(breathingPhase) * breathingAmplitude;
 
-            // Apply forces with friction
-            vX[i] = (vX[i] + fx) * friction;
-            vY[i] = (vY[i] + fy) * friction;
+            // 🎭 ELLIPTICAL WOBBLE: Orbits are slightly elliptical for organic feel
+            const ellipseRatio = 0.92 + Math.sin(i * 2.3) * 0.08; // 0.84 - 1.0
+            const wobblePhase = angles[i] * 2 + i; // Each node has unique wobble
+            const radiusWobble = Math.sin(wobblePhase * 0.3) * 5;
 
-            // Velocity clamp for stability (CTC-governed)
-            const maxV = ctcMaxVelocity.value;
-            const v = Math.sqrt(vX[i] * vX[i] + vY[i] * vY[i]);
-            if (v > maxV) {
-                vX[i] = (vX[i] / v) * maxV;
-                vY[i] = (vY[i] / v) * maxV;
-            }
+            // Calculate position on orbital path
+            const effectiveRadius = currentRadius + radiusWobble;
+            const targetX = Math.cos(angles[i]) * effectiveRadius * ellipseRatio;
+            const targetY = Math.sin(angles[i]) * effectiveRadius;
 
-            curX[i] += vX[i] * delta * 60;
-            curY[i] += vY[i] * delta * 60;
+            // 🏠 SMOOTH SETTLING: Nodes gently drift to their orbital position
+            // This creates the "home" feeling - everything settles calmly
+            const settleSpeed = 0.03; // Gentle interpolation toward target
+            curX[i] += (targetX - curX[i]) * settleSpeed;
+            curY[i] += (targetY - curY[i]) * settleSpeed;
         }
     });
 
@@ -264,8 +254,8 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
 
     const gesture = Gesture.Simultaneous(
         Gesture.Pan()
-            .activeOffsetX([-10, 10]) // Don't snatch small horizontal moves
-            .activeOffsetY([-15, 15]) // Don't snatch navigation swipes (parent handles them)
+            .activeOffsetX([-5, 5]) // 🔥 MORE SENSITIVE (5px) - Claims gesture before MindLayout (30px)
+            .activeOffsetY([-35, 35]) // Higher than MindLayout's 25, so navigation swipe wins
             .onStart(() => {
                 'worklet';
             })
@@ -284,6 +274,9 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
                 translateY.value += e.changeY / scale.value;
                 rawFocusX.value -= e.changeX * 0.3;
                 rawFocusY.value -= e.changeY * 0.3;
+            })
+            .onEnd(() => {
+                'worklet';
             }),
         Gesture.Pinch().onChange(e => {
             'worklet';
@@ -361,27 +354,57 @@ const NeuralEdge = ({ s, t, nodes, posX, posY, time, edgeActivityLevel }: any) =
     const p1 = useDerivedValue(() => ({ x: posX.value[sIdx] ?? 0, y: posY.value[sIdx] ?? 0 }));
     const p2 = useDerivedValue(() => ({ x: posX.value[tIdx] ?? 0, y: posY.value[tIdx] ?? 0 }));
 
+    // ⚡ CALM ENERGY FLOW: Slow pulse traveling along edge
+    const pulseProgress = useDerivedValue(() => {
+        const t = Number(time.value);
+        // Each edge has a unique phase based on its endpoints
+        const phase = (sIdx + tIdx) * 0.3;
+        return (Math.sin(t * 0.4 + phase) + 1) / 2; // 3x slower (0.4 vs 1.2)
+    });
+
+    // Pulse position interpolated between p1 and p2
+    const pulseX = useDerivedValue(() => {
+        const progress = pulseProgress.value;
+        return p1.value.x + (p2.value.x - p1.value.x) * progress;
+    });
+    const pulseY = useDerivedValue(() => {
+        const progress = pulseProgress.value;
+        return p1.value.y + (p2.value.y - p1.value.y) * progress;
+    });
+
     // Phase A3: Edge opacity based on CTC activity level
     const opacity = useDerivedValue(() => {
         const level = edgeActivityLevel?.value ?? 1;
 
         if (level === 0) {
-            // DORMANT: Nearly invisible
-            return 0.03;
+            return 0.04;
         } else if (level === 1) {
-            // BREATHING: Subtle pulse
-            return 0.06 + Math.sin(Number(time.value) * 1.5) * 0.02;
+            return 0.08 + Math.sin(Number(time.value) * 1.5) * 0.03;
         } else {
-            // ACTIVE: Full visibility with pulse
-            return 0.12 + Math.sin(Number(time.value) * 3) * 0.04;
+            return 0.15 + Math.sin(Number(time.value) * 3) * 0.05;
         }
+    });
+
+    // Pulse glow intensity
+    const pulseOpacity = useDerivedValue(() => {
+        const level = edgeActivityLevel?.value ?? 1;
+        if (level === 0) return 0;
+        return 0.4 + Math.sin(Number(time.value) * 3) * 0.2;
     });
 
     if (sIdx === -1 || tIdx === -1) return null;
 
     return (
-        <Group opacity={opacity}>
-            <Line p1={p1} p2={p2} color="rgba(99, 102, 241, 0.15)" strokeWidth={1} />
+        <Group>
+            {/* Base connection line */}
+            <Group opacity={opacity}>
+                <Line p1={p1} p2={p2} color="rgba(99, 102, 241, 0.2)" strokeWidth={1.5} />
+            </Group>
+
+            {/* ⚡ Energy pulse traveling along the edge */}
+            <Circle cx={pulseX} cy={pulseY} r={3} color="#818cf8" opacity={pulseOpacity}>
+                <Blur blur={4} />
+            </Circle>
         </Group>
     );
 };
@@ -389,50 +412,79 @@ const NeuralEdge = ({ s, t, nodes, posX, posY, time, edgeActivityLevel }: any) =
 const NeuralNode = ({ i, node, posX, posY, scale, time, isActive }: { i: number, node: Snippet, posX: any, posY: any, scale: any, time: any, isActive: boolean }) => {
     const color = TYPE_COLORS[node.type] || TYPE_COLORS.fact;
 
-    const x = useDerivedValue(() => posX.value[i] ?? 0);
-    const y = useDerivedValue(() => posY.value[i] ?? 0);
+    // � CALM BREATHING: Like a sleeping heartbeat
+    const breathRate = 0.15 + (i % 5) * 0.02; // Very slow: 0.15 - 0.25 Hz (4-7 second cycles)
+    const breathDepth = 0.05 + (i % 4) * 0.01; // Very subtle: 5-9% size change
 
-    // 🧠 Multi-layered pulse for "Neural" feel
+    // 💫 MICRO FLOAT: Almost imperceptible gentle motion
+    const driftX = useDerivedValue(() => {
+        const t = Number(time.value);
+        return Math.sin(t * 0.08 + i * 1.3) * 2 + Math.cos(t * 0.12 + i * 0.7) * 1;
+    });
+    const driftY = useDerivedValue(() => {
+        const t = Number(time.value);
+        return Math.cos(t * 0.06 + i * 1.1) * 2 + Math.sin(t * 0.1 + i * 0.9) * 1;
+    });
+
+    const x = useDerivedValue(() => (posX.value[i] ?? 0) + driftX.value);
+    const y = useDerivedValue(() => (posY.value[i] ?? 0) + driftY.value);
+
+    // 🌙 Size pulse (very gentle, like stars twinkling)
     const radius = useDerivedValue(() => {
-        const base = isActive ? 14 : 7;
+        const base = isActive ? 12 : 8;
         const timeVal = Number(time.value);
-        const mainPulse = Math.sin(timeVal * 2.5 + i) * 0.15;
-        const microPulse = Math.sin(timeVal * 8 + i * 0.5) * 0.05;
-        return base * (1 + mainPulse + microPulse);
+        const mainPulse = Math.sin(timeVal * breathRate + i * 0.7) * breathDepth;
+        return base * (1 + mainPulse);
     });
 
+    // ✨ WARM GLOW: Occasional soft twinkle (not harsh blink)
+    const twinkleIntensity = useDerivedValue(() => {
+        const t = Number(time.value);
+        // Slower, smoother twinkle pattern - like distant stars
+        const wave1 = Math.sin(t * 0.3 + i * 2.3);
+        const wave2 = Math.sin(t * 0.5 + i * 1.7);
+        const combined = (wave1 + wave2) / 2;
+        // Only brighten when waves align (rare, special moments)
+        return combined > 0.7 ? (combined - 0.7) * 1.5 : 0;
+    });
+
+    // 🌟 AURA: Warm, cozy glow
     const auraIntensity = useDerivedValue(() => {
-        return 0.2 + Math.sin(Number(time.value) * 1.5 + i * 0.8) * 0.1;
+        const t = Number(time.value);
+        const base = 0.25 + Math.sin(t * breathRate * 0.5 + i * 0.8) * 0.05;
+        return base + twinkleIntensity.value * 0.15;
     });
 
-    const glowRadius = useDerivedValue(() => radius.value * 3.5);
-    const outerGlowRadius = useDerivedValue(() => glowRadius.value * 1.2);
-    const sparkleRadius = useDerivedValue(() => radius.value * 0.4);
-    const auraOpacity = useDerivedValue(() => auraIntensity.value * 0.4);
+    const glowRadius = useDerivedValue(() => radius.value * 2.5);
+    const outerGlowRadius = useDerivedValue(() => glowRadius.value * 1.8);
+    const sparkleRadius = useDerivedValue(() => radius.value * 0.35);
+    const auraOpacity = useDerivedValue(() => auraIntensity.value * 0.5);
+
+    // Core and sparkle warm up during twinkle
+    const coreOpacity = useDerivedValue(() => 0.9 + twinkleIntensity.value * 0.1);
+    const sparkleOpacity = useDerivedValue(() => 0.4 + twinkleIntensity.value * 0.4);
 
     const opacity = useDerivedValue(() => {
-        return interpolate(scale.value, [0.2, 0.5], [0.5, 1.0], Extrapolate.CLAMP);
+        return interpolate(scale.value, [0.2, 0.5], [0.7, 1.0], Extrapolate.CLAMP);
     });
 
     return (
         <Group opacity={opacity}>
-            {/* 1. Distant Breathing Aura */}
+            {/* 1. Distant Aura - warmer, softer */}
             <Circle cx={x} cy={y} r={outerGlowRadius} color={color} opacity={auraOpacity}>
-                <Blur blur={25} />
+                <Blur blur={40} />
             </Circle>
 
-            {/* 2. Proximity Glow */}
-            <Circle cx={x} cy={y} r={glowRadius} color={color} opacity={0.2}>
-                <Blur blur={14} />
+            {/* 2. Inner Glow - cozy warmth */}
+            <Circle cx={x} cy={y} r={glowRadius} color={color} opacity={0.25}>
+                <Blur blur={20} />
             </Circle>
 
-            {/* 3. The Core Presence */}
-            <Circle cx={x} cy={y} r={radius} color={color}>
-                {isActive && <Blur blur={4} />}
-            </Circle>
+            {/* 3. Core - stable, like home */}
+            <Circle cx={x} cy={y} r={radius} color={color} opacity={coreOpacity} />
 
-            {/* 4. Neural Sparkle (Internal Reflection) */}
-            <Circle cx={x} cy={y} r={sparkleRadius} color="#ffffff" opacity={0.5} />
+            {/* 4. Center sparkle - twinkles gently */}
+            <Circle cx={x} cy={y} r={sparkleRadius} color="#ffffff" opacity={sparkleOpacity} />
         </Group>
     );
 };

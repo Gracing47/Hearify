@@ -77,16 +77,17 @@ export async function setElevenLabsKey(key: string): Promise<void> {
 
 /**
  * Check if all required API keys are configured
+ * Note: ElevenLabs removed - now using OpenAI TTS
  */
 export async function areKeysConfigured(): Promise<boolean> {
     const keys = await getAllKeys();
     return !!(
         keys.groq &&
         keys.deepseek &&
-        keys.openai &&
-        keys.elevenlabs
+        keys.openai
     );
 }
+
 
 /**
  * Get all API keys (for validation UI)

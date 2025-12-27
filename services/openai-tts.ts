@@ -1,58 +1,58 @@
 /**
- * ElevenLabs TTS Service
+ * OpenAI TTS Service — TTS-1-HD
  * 
- * Uses REST API for full audio generation (not WebSocket streaming)
- * This produces smooth, complete audio without chunk stuttering
+ * Replaced ElevenLabs with OpenAI TTS for cost efficiency.
+ * TTS-1-HD provides high-quality voice output at ~$0.03/1K chars.
+ * 
+ * Available voices: alloy, echo, fable, onyx, nova, shimmer
  */
 
 import * as FileSystem from 'expo-file-system/legacy';
-import { getElevenLabsKey } from '../config/api';
+import { getOpenAIKey } from '../config/api';
 
-const VOICE_ID = 'EXAVITQu4vr4xnSDxMaL'; // Sarah voice
-const MODEL_ID = 'eleven_flash_v2_5';
-const API_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
+const MODEL = 'tts-1'; // Replaced tts-1-hd with tts-1 for real-time speed (up to 3x faster)
+const VOICE = 'nova';
+const API_URL = 'https://api.openai.com/v1/audio/speech';
 
 export interface TTSOptions {
-    voiceId?: string;
-    stability?: number;
-    similarityBoost?: number;
+    voice?: 'alloy' | 'echo' | 'fable' | 'onyx' | 'nova' | 'shimmer';
+    speed?: number; // 0.25 to 4.0
 }
 
 /**
- * Generate complete audio file from text using ElevenLabs REST API
- * Returns the local file URI for playback
+ * Generate speech audio from text using OpenAI TTS-1
+ * Returns local file URI for playback
  */
 export async function generateSpeech(text: string, options: TTSOptions = {}): Promise<string> {
-    const apiKey = await getElevenLabsKey();
+    const apiKey = await getOpenAIKey();
     if (!apiKey) {
-        throw new Error('ElevenLabs API key not configured');
+        throw new Error('OpenAI API key not configured');
     }
 
-    const voiceId = options.voiceId || VOICE_ID;
-    const url = `${API_URL}/${voiceId}`;
+    const voice = options.voice || VOICE;
+    const speed = options.speed || 1.05; // Slightly faster to feel more responsive
 
-    console.log(`[ElevenLabs] Generating speech for ${text.length} chars...`);
+    console.log(`[OpenAI TTS] Generating speech for ${text.length} chars (voice: ${voice})...`);
+    const startTime = Date.now();
 
-    const response = await fetch(url, {
+    const response = await fetch(API_URL, {
         method: 'POST',
         headers: {
-            'Accept': 'audio/mpeg',
+            'Authorization': `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
-            'xi-api-key': apiKey,
         },
         body: JSON.stringify({
-            text,
-            model_id: MODEL_ID,
-            voice_settings: {
-                stability: options.stability ?? 0.5,
-                similarity_boost: options.similarityBoost ?? 0.75,
-            },
+            model: MODEL,
+            input: text,
+            voice,
+            speed,
+            response_format: 'mp3',
         }),
     });
 
     if (!response.ok) {
         const error = await response.text();
-        throw new Error(`ElevenLabs API error: ${response.status} - ${error}`);
+        throw new Error(`OpenAI TTS error: ${response.status} - ${error}`);
     }
 
     // Get audio as base64
@@ -62,7 +62,6 @@ export async function generateSpeech(text: string, options: TTSOptions = {}): Pr
     // Save to cache directory
     const cacheDir = FileSystem.cacheDirectory || FileSystem.documentDirectory;
     if (!cacheDir) {
-        // Fallback: return data URI directly
         return `data:audio/mpeg;base64,${base64}`;
     }
 
@@ -73,7 +72,8 @@ export async function generateSpeech(text: string, options: TTSOptions = {}): Pr
         encoding: FileSystem.EncodingType.Base64,
     });
 
-    console.log(`[ElevenLabs] Audio saved to: ${fileUri}`);
+    const elapsed = Date.now() - startTime;
+    console.log(`[OpenAI TTS] Audio saved in ${elapsed}ms: ${fileUri}`);
     return fileUri;
 }
 
@@ -85,7 +85,6 @@ function blobToBase64(blob: Blob): Promise<string> {
         const reader = new FileReader();
         reader.onloadend = () => {
             const result = reader.result as string;
-            // Remove data URL prefix (data:audio/mpeg;base64,)
             const base64 = result.split(',')[1];
             resolve(base64);
         };
@@ -105,7 +104,6 @@ export async function cleanupTTSCache(): Promise<void> {
         const files = await FileSystem.readDirectoryAsync(cacheDir);
         const ttsFiles = files.filter(f => f.startsWith('tts_') && f.endsWith('.mp3'));
 
-        // Keep only last 5 files
         if (ttsFiles.length > 5) {
             const toDelete = ttsFiles.slice(0, -5);
             await Promise.all(
@@ -113,9 +111,9 @@ export async function cleanupTTSCache(): Promise<void> {
                     FileSystem.deleteAsync(`${cacheDir}${f}`, { idempotent: true })
                 )
             );
-            console.log(`[ElevenLabs] Cleaned up ${toDelete.length} old files`);
+            console.log(`[OpenAI TTS] Cleaned up ${toDelete.length} old files`);
         }
     } catch (e) {
-        console.warn('[ElevenLabs] Cache cleanup failed:', e);
+        console.warn('[OpenAI TTS] Cache cleanup failed:', e);
     }
 }

@@ -12,15 +12,12 @@ import { useTTS } from '@/hooks/useTTS';
 import { useVoiceCapture } from '@/hooks/useVoiceCapture';
 import { processWithReasoning } from '@/services/deepseek';
 import { DailyDelta, generateYesterdayDelta, getDeltaForDate } from '@/services/DeltaService';
-import { getFastResponse } from '@/services/fastchat';
 import { transcribeAudio } from '@/services/groq';
-import { computeFocusTarget } from '@/services/LiveFocusService';
 import { generateEmbedding } from '@/services/openai';
 import { saveSnippetWithDedup } from '@/services/SemanticDedupService';
 import { useContextStore } from '@/store/contextStore';
 import { useConversationStore } from '@/store/conversation';
-import { useProfileStore } from '@/store/profile';
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -35,7 +32,9 @@ import { ScrollView } from 'react-native-gesture-handler';
 import Animated, {
     Extrapolate,
     FadeInUp,
+    FadeOut,
     interpolate,
+    LinearTransition,
     SharedValue,
     useAnimatedStyle,
     useSharedValue,
@@ -46,6 +45,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { processWithGPT } from '@/services/openai-chat';
 import * as Haptics from '@/utils/haptics';
 
 type AppState = 'idle' | 'listening' | 'processing' | 'speaking';
@@ -55,31 +55,63 @@ interface OrbitScreenProps {
     onOpenChronicle?: () => void;
 }
 
+const AnimatedScrollView = Animated.createAnimatedComponent(ScrollView);
+
+/**
+ * 🎨 Memoized Message Bubble - Performance Core
+ * Prevents re-renders of the whole conversation during active speaking
+ */
+const MessageBubble = React.memo(({ msg, isAI }: { msg: any, isAI: boolean }) => {
+    return (
+        <Animated.View
+            entering={FadeInUp.springify().damping(20).stiffness(100)}
+            exiting={FadeOut.duration(200)}
+            layout={LinearTransition.springify().damping(25).stiffness(120)}
+            style={[
+                styles.messageWrapper,
+                isAI ? styles.aiMessageWrapper : styles.userMessageWrapper
+            ]}
+        >
+            <View style={[
+                styles.messageBubble,
+                isAI ? styles.aiBubble : styles.userBubble
+            ]}>
+                {isAI && msg.reasoning && (
+                    <View style={styles.reasoningBox}>
+                        <Text style={styles.reasoningLabel}>REASONING</Text>
+                        <Text style={styles.reasoningText}>{msg.reasoning}</Text>
+                    </View>
+                )}
+                <Text style={styles.messageText}>{msg.content}</Text>
+            </View>
+        </Animated.View>
+    );
+});
+
 export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     const [appState, setAppState] = useState<AppState>('idle');
     const [isKeysConfigured, setIsKeysConfigured] = useState(false);
     const [menuOpen, setMenuOpen] = useState(false);
     const [dailyDelta, setDailyDelta] = useState<DailyDelta | null>(null);
     const [deltaShown, setDeltaShown] = useState(true);
+    const [deepThinking, setDeepThinking] = useState(false);
 
     const voiceCapture = useVoiceCapture();
     const tts = useTTS();
-    const {
-        messages,
-        addUserMessage,
-        addAIResponse,
-        setTranscribing,
-        setReasoning,
-        setEmbedding,
-        setSpeaking,
-        setError,
-        isTranscribing,
-        isReasoning,
-        isEmbedding,
-        isSpeaking,
-    } = useConversationStore();
 
-    const { currentProfile } = useProfileStore();
+    // Select only what we need from store to minimize re-renders
+    const messages = useConversationStore(state => state.messages);
+    const addUserMessage = useConversationStore(state => state.addUserMessage);
+    const addAIResponse = useConversationStore(state => state.addAIResponse);
+    const setTranscribing = useConversationStore(state => state.setTranscribing);
+    const setReasoning = useConversationStore(state => state.setReasoning);
+    const setEmbedding = useConversationStore(state => state.setEmbedding);
+    const setSpeaking = useConversationStore(state => state.setSpeaking);
+    const setError = useConversationStore(state => state.setError);
+    const isTranscribing = useConversationStore(state => state.isTranscribing);
+    const isReasoning = useConversationStore(state => state.isReasoning);
+    const isEmbedding = useConversationStore(state => state.isEmbedding);
+    const isSpeaking = useConversationStore(state => state.isSpeaking);
 
     const recordButtonScale = useSharedValue(1);
 
@@ -102,29 +134,39 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
         transform: [{ scale: recordButtonScale.value }],
     }));
 
-    // Scroll ref for auto-scroll to end
-    const scrollRef = React.useRef<any>(null);
-    const AnimatedScrollView = Animated.createAnimatedComponent(ScrollView);
+    // Scroll ref for auto-scroll
+    const scrollRef = React.useRef<ScrollView>(null);
+    const prevMessageCount = React.useRef(0);
+
+    // 🚀 UNIFIED SMART SCROLL: Handles all message additions smoothly
+    useEffect(() => {
+        if (messages.length > prevMessageCount.current) {
+            const timer = setTimeout(() => {
+                scrollRef.current?.scrollToEnd({ animated: true });
+            }, 250);
+            return () => clearTimeout(timer);
+        }
+        prevMessageCount.current = messages.length;
+    }, [messages.length]);
 
     const insets = useSafeAreaInsets();
-    const { height: SCREEN_HEIGHT } = Dimensions.get('window');
+    const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-    // 🚀 SINGULARITY: The Orb reacts to the swipe towards Horizon (+layoutY)
+    // 🚀 SINGULARITY: The Orb reacts to horizontal swipe towards Horizon
     const heroOrbStyle = useAnimatedStyle(() => {
         if (!layoutY) return {};
 
-        // As layoutY goes from 0 to -SCREEN_HEIGHT (Horizon Screen)
         const scale = interpolate(
             Number(layoutY.value),
-            [-SCREEN_HEIGHT, 0],
-            [15, 1], // Radical zoom into the "Neural Matrix"
+            [-SCREEN_WIDTH, 0],
+            [12, 1],
             Extrapolate.CLAMP
         );
 
         const opacity = interpolate(
             Number(layoutY.value),
-            [-SCREEN_HEIGHT, -SCREEN_HEIGHT * 0.5, 0],
-            [0, 0.8, 1], // Dissolve into the stars
+            [-SCREEN_WIDTH, -SCREEN_WIDTH * 0.4, 0],
+            [0, 0.6, 1],
             Extrapolate.CLAMP
         );
 
@@ -133,6 +175,7 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
             opacity,
         };
     });
+
     useEffect(() => {
         const init = async () => {
             const configured = await areKeysConfigured();
@@ -141,38 +184,27 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
         init();
     }, []);
 
-    // Fetch yesterday's Daily Delta - Only show at appropriate times (lunch/evening)
     useEffect(() => {
         const fetchDelta = async () => {
             try {
                 const hour = new Date().getHours();
-
-                // Only show Delta during reflection windows:
-                // - Lunch: 12:00 - 14:00
-                // - Evening: 18:00 - 21:00
                 const isReflectionTime = (hour >= 12 && hour <= 14) || (hour >= 18 && hour <= 21);
 
-                if (!isReflectionTime) {
-                    // Not the right time - skip silently
-                    return;
-                }
+                if (!isReflectionTime) return;
 
                 const yesterday = new Date();
                 yesterday.setDate(yesterday.getDate() - 1);
                 let delta = await getDeltaForDate(yesterday);
 
-                // Only generate if we're in the window and none exists
                 if (!delta && isReflectionTime) {
                     delta = await generateYesterdayDelta();
                 }
 
-                // Small delay so it doesn't feel pushy
                 setTimeout(() => {
                     setDailyDelta(delta);
                 }, 2000);
 
             } catch (e) {
-                // Fail silently - Delta is not critical
                 console.debug('[OrbitScreen] Delta skipped:', e);
             }
         };
@@ -205,10 +237,9 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                 Alert.alert('Error', 'Failed to process audio');
             }
         } else if (appState === 'speaking') {
-            // 🛑 INTERRUPT: Stop AI speaking immediately
             tts.stop();
             setAppState('idle');
-            Haptics.listening(); // Subtle haptic to confirm stop
+            Haptics.listening();
         }
     }, [appState, voiceCapture, isKeysConfigured, tts]);
 
@@ -216,119 +247,74 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
         try {
             Haptics.thinking();
 
-            console.log('[Neural Loop] Step 1: Transcribing...');
             setTranscribing(true);
             const { text: transcript } = await transcribeAudio(audioUri);
             setTranscribing(false);
             addUserMessage(transcript);
 
-            setEmbedding(true); // Re-use embedding state for retrieval feedback
-            const [{ rich: queryEmbed }, isChattyQuery] = await Promise.all([
+            setEmbedding(true);
+            const [{ rich: queryEmbed }] = await Promise.all([
                 generateEmbedding(transcript),
-                Promise.resolve(
-                    transcript.split(' ').length < 15 &&
-                    !/will|muss|soll|ziel|plan|merke|notier|fakt|wichtig|wahr|wer|was|erinnerst|weißt/i.test(transcript)
-                )
             ]);
 
-            // 🔥 Sync focus vector to global store
             useContextStore.getState().setFocusVector(queryEmbed);
-
-            // 🚀 PRE-COGNITION: Compute live focus target for Horizon camera drift
-            // This runs async and updates the store — Horizon will pick it up
-            computeFocusTarget(transcript).then(target => {
-                if (target) {
-                    useContextStore.getState().setLiveFocusTarget({
-                        x: target.x,
-                        y: target.y,
-                        confidence: target.confidence
-                    });
-                }
-            });
 
             const similarSnippets = await findSimilarSnippets(queryEmbed, 5);
 
-            // 🧠 High-Context formatting for the AI
             const context = similarSnippets.map(s => {
-                const date = new Date(s.timestamp);
                 const timeAgo = Math.floor((Date.now() - s.timestamp) / (1000 * 60 * 60 * 24));
                 const temporalHeader = timeAgo === 0 ? "Heute" : timeAgo === 1 ? "Gestern" : `${timeAgo} Tage her`;
                 return `[${s.type.toUpperCase()} | ${s.topic} | ${temporalHeader}]: ${s.content}`;
             });
             setEmbedding(false);
 
-            console.log('[Neural Loop] Step 3: Neural Path Execution...');
             let finalResponse = '';
             let finalReasoning = '';
             let snippets: any[] = [];
 
-            // 🧠 Transform history for AI consistency
             const history = messages.map(m => ({
                 role: m.role as 'user' | 'assistant',
                 content: m.content
             }));
 
-            if (isChattyQuery) {
-                console.log('[Neural Loop] Executing Fast Path (Groq)...');
-                const fastResponse = await getFastResponse(
-                    transcript,
-                    currentProfile?.name,
-                    context,
-                    history
-                );
-
-                if (fastResponse.toLowerCase().includes('thinking')) {
-                    console.log('[Neural Loop] Fast Path suggested reasoning. Switching...');
-                    setReasoning(true);
-                    const result = await processWithReasoning(transcript, context, history);
-                    finalResponse = result.response;
-                    finalReasoning = result.reasoning;
-                    snippets = result.snippets;
-                    setReasoning(false);
-                } else {
-                    finalResponse = fastResponse;
-                }
-            } else {
-                console.log('[Neural Loop] Executing Reasoning Path (DeepSeek)...');
+            if (deepThinking) {
                 setReasoning(true);
                 const result = await processWithReasoning(transcript, context, history);
                 finalResponse = result.response;
                 finalReasoning = result.reasoning;
                 snippets = result.snippets;
-                setReasoning(false);
+            } else {
+                setReasoning(true);
+                const result = await processWithGPT(transcript, context, history);
+                finalResponse = result.response;
+                snippets = result.snippets;
             }
 
-            console.log('[Neural Loop] Step 4: Saving snippets with Semantic Deduplication...');
+            addAIResponse(finalResponse, finalReasoning);
+            setReasoning(false);
+
             setEmbedding(true);
             if (snippets.length > 0) {
-                // 🧠 NEW: Use SemanticDedupService for intelligent storage
-                // This handles embedding, similarity check, and smart merge
-                for (const snippet of snippets) {
-                    await saveSnippetWithDedup({
+                await Promise.all(snippets.map(snippet =>
+                    saveSnippetWithDedup({
                         content: snippet.content,
                         type: snippet.type,
                         sentiment: snippet.sentiment,
                         topic: snippet.topic,
                         reasoning: finalReasoning,
-                    });
-                }
+                    })
+                ));
             }
             setEmbedding(false);
 
-            // Note: SatelliteInsertEngine is triggered inside saveSnippetWithDedup
-            console.log('[Neural Loop] Semantic Deduplication complete.');
-
-            console.log('[Neural Loop] Step 5: Speaking...');
-
-
-            Haptics.speaking();
-            addAIResponse(finalResponse, finalReasoning);
             setAppState('speaking');
             setSpeaking(true);
             try {
-                await tts.speak(finalResponse);
+                await tts.speak(finalResponse, () => {
+                    Haptics.speaking();
+                });
             } catch (ttsError) {
-                console.error('[Neural Loop] TTS failed but continuing:', ttsError);
+                console.error('[Neural Loop] TTS failed:', ttsError);
             }
 
             setSpeaking(false);
@@ -343,36 +329,22 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
             setSpeaking(false);
             setAppState('idle');
             Haptics.error();
-            Alert.alert('Error', 'Neural loop failed. Check console for details.');
+            Alert.alert('Error', 'Neural loop failed.');
         }
-    }, []);
+    }, [deepThinking, messages, voiceCapture, tts, addAIResponse, addUserMessage, setTranscribing, setEmbedding, setReasoning, setSpeaking, setError]);
 
-    const getOrbState = (): 'idle' | 'listening' | 'thinking' | 'speaking' => {
+    const orbState = useMemo(() => {
         if (appState === 'listening') return 'listening';
         if (appState === 'processing') return 'thinking';
         if (appState === 'speaking') return 'speaking';
         return 'idle';
-    };
-
-    // Auto-scroll to bottom on new messages
-    useEffect(() => {
-        setTimeout(() => {
-            scrollRef.current?.scrollToEnd({ animated: true });
-        }, 100);
-    }, [messages]);
+    }, [appState]);
 
     return (
         <View style={styles.container}>
-            {/* Note: Confirmations now handled by ToastContainer in MindLayout */}
-
             <View style={[styles.safeArea, { paddingTop: insets.top }]}>
-                {/* Side Menu */}
-                <SideMenu
-                    isOpen={menuOpen}
-                    onClose={() => setMenuOpen(false)}
-                />
+                <SideMenu isOpen={menuOpen} onClose={() => setMenuOpen(false)} />
 
-                {/* Minimal Header with Burger */}
                 <View style={styles.header}>
                     <BurgerMenuButton onPress={() => setMenuOpen(true)} />
                     <Text style={styles.headerTitle}>Orbit</Text>
@@ -382,67 +354,43 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                     </Pressable>
                 </View>
 
-                {/* Main Content Area */}
                 {messages.length === 0 ? (
-                    /* Welcome Screen - Centered Layout */
                     <View style={styles.welcomeContainer}>
-                        {/* Daily Delta Card */}
                         {dailyDelta && deltaShown && (
-                            <DeltaCard
-                                delta={dailyDelta}
-                                onDismiss={() => setDeltaShown(false)}
-                            />
+                            <DeltaCard delta={dailyDelta} onDismiss={() => setDeltaShown(false)} />
                         )}
 
-                        {/* Neural Orb - Visual Center */}
                         <Animated.View style={[styles.heroOrbWrapper, heroOrbStyle]}>
-                            <NeuralOrb
-                                intensity={tts.intensity}
-                                state={getOrbState()}
-                                size={180}
-                            />
+                            <NeuralOrb intensity={tts.intensity} state={orbState} size={180} />
                         </Animated.View>
 
-                        {/* Welcome Text */}
-                        <Text style={styles.welcomeText}>
-                            Was beschäftigt{'\n'}dich gerade?
-                        </Text>
-
-                        <Text style={styles.welcomeSubtext}>
-                            Ich höre zu, denke mit und merke mir alles.
-                        </Text>
+                        <Text style={styles.welcomeText}>Was beschäftigt{'\n'}dich gerade?</Text>
+                        <Text style={styles.welcomeSubtext}>Ich höre zu, denke mit und merke mir alles.</Text>
                     </View>
                 ) : (
-                    /* Scrollable Messages */
                     <AnimatedScrollView
                         ref={scrollRef}
                         style={styles.messageList}
                         contentContainerStyle={styles.messageListContent}
                         showsVerticalScrollIndicator={false}
                         scrollEventThrottle={16}
-                        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
+                        keyboardShouldPersistTaps="handled"
                     >
-                        {messages.map((msg, idx) => (
-                            <Animated.View
-                                key={idx}
-                                entering={FadeInUp.delay(idx * 50)}
-                                style={[
-                                    styles.messageWrapper,
-                                    msg.role === 'user' ? styles.userMessageWrapper : styles.aiMessageWrapper
-                                ]}
-                            >
-                                <View style={[
-                                    styles.messageBubble,
-                                    msg.role === 'user' ? styles.userBubble : styles.aiBubble
-                                ]}>
-                                    <Text style={styles.messageText}>{msg.content}</Text>
-                                </View>
-                            </Animated.View>
+                        {messages.map((msg) => (
+                            <MessageBubble
+                                key={msg.id}
+                                msg={msg}
+                                isAI={msg.role === 'assistant'}
+                            />
                         ))}
 
-                        {/* Thinking Indicator */}
                         {isReasoning && (
-                            <Animated.View entering={FadeInUp} style={[styles.messageWrapper, styles.aiMessageWrapper]}>
+                            <Animated.View
+                                entering={FadeInUp}
+                                exiting={FadeOut}
+                                layout={LinearTransition}
+                                style={[styles.messageWrapper, styles.aiMessageWrapper]}
+                            >
                                 <View style={[styles.messageBubble, styles.aiBubble, styles.thinkingBubble]}>
                                     <NeuralThinking />
                                 </View>
@@ -451,19 +399,28 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                     </AnimatedScrollView>
                 )}
 
-                {/* Floating Input Bar (Antigravity HUD) */}
                 <Animated.View
-                    entering={FadeInUp.delay(1000).springify()}
+                    entering={FadeInUp.delay(300).springify()}
                     style={[styles.inputBar, { bottom: insets.bottom + 20 }]}
                 >
+                    <TouchableOpacity
+                        style={[styles.thinkingToggle, deepThinking && styles.thinkingToggleActive]}
+                        onPress={() => {
+                            setDeepThinking(!deepThinking);
+                            Haptics.light();
+                        }}
+                    >
+                        <Text style={styles.thinkingToggleText}>{deepThinking ? '🧠' : '⚡'}</Text>
+                    </TouchableOpacity>
+
                     <View style={styles.inputField}>
                         <Text style={styles.inputPlaceholder}>
-                            {appState === 'listening' ? '🔴 System is listening...' :
-                                isTranscribing ? '✍️ Decoding neural signal...' :
+                            {appState === 'listening' ? '🔴 Listening...' :
+                                isTranscribing ? '✍️ Transcribing...' :
                                     isEmbedding ? '🧠 Scanning Matrix...' :
-                                        isReasoning ? '💭 Pathfinding thoughts...' :
-                                            isSpeaking ? '🔊 Synthesizing voice...' :
-                                                'Share your consciousness...'}
+                                        isReasoning ? (deepThinking ? '💭 Deep thinking...' : '⚡ Thinking...') :
+                                            isSpeaking ? '🔊 Speaking...' :
+                                                deepThinking ? 'Deep thinking enabled...' : 'Share your consciousness...'}
                         </Text>
                     </View>
 
@@ -475,7 +432,6 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                         ]}
                         onPress={handleRecordPress}
                         disabled={appState === 'processing' || appState === 'speaking'}
-                        activeOpacity={0.8}
                     >
                         <Animated.View style={animatedButtonStyle}>
                             {appState === 'listening' ? (
@@ -503,13 +459,13 @@ const styles = StyleSheet.create({
     safeArea: {
         flex: 1,
     },
-    // Header
     header: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
         paddingHorizontal: 20,
         paddingVertical: 12,
+        zIndex: 100,
     },
     chronicleButton: {
         flexDirection: 'row',
@@ -537,13 +493,12 @@ const styles = StyleSheet.create({
         color: '#fff',
         letterSpacing: -0.3,
     },
-    // Welcome Screen - Centered Orb Layout
     welcomeContainer: {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
         paddingHorizontal: 32,
-        paddingBottom: 80, // Space for input bar
+        paddingBottom: 80,
     },
     heroOrbWrapper: {
         marginBottom: 48,
@@ -563,17 +518,15 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         lineHeight: 22,
     },
-    // Message List
     messageList: {
         flex: 1,
     },
     messageListContent: {
         paddingHorizontal: 20,
         paddingTop: 16,
-        paddingBottom: 140,
+        paddingBottom: 200,
         gap: 12,
     },
-    // Message Bubbles (Liquid Glass)
     messageWrapper: {
         maxWidth: '85%',
         marginVertical: 4,
@@ -629,7 +582,6 @@ const styles = StyleSheet.create({
         gap: 10,
         backgroundColor: 'rgba(28, 28, 35, 0.4)',
     },
-    // Floating Input Bar (HUD)
     inputBar: {
         position: 'absolute',
         left: 16,
@@ -697,5 +649,26 @@ const styles = StyleSheet.create({
         height: 16,
         borderRadius: 3,
         backgroundColor: '#fff',
+    },
+    thinkingToggle: {
+        width: 40,
+        height: 40,
+        borderRadius: 20,
+        backgroundColor: 'rgba(255, 255, 255, 0.08)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+    },
+    thinkingToggleActive: {
+        backgroundColor: 'rgba(139, 92, 246, 0.25)',
+        borderColor: 'rgba(139, 92, 246, 0.5)',
+        shadowColor: '#8b5cf6',
+        shadowOffset: { width: 0, height: 0 },
+        shadowOpacity: 0.5,
+        shadowRadius: 8,
+    },
+    thinkingToggleText: {
+        fontSize: 18,
     },
 });

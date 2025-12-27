@@ -1,7 +1,7 @@
 /**
  * TTS (Text-to-Speech) Hook
  * 
- * Simple, clean implementation using ElevenLabs REST API
+ * Uses OpenAI TTS-1-HD for high-quality voice generation
  * Generates complete audio file and plays it smoothly
  * speak() returns a Promise that resolves when audio finishes
  */
@@ -9,7 +9,8 @@
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useSharedValue, withTiming } from 'react-native-reanimated';
-import { cleanupTTSCache, generateSpeech } from '../services/elevenlabs';
+import { cleanupTTSCache, generateSpeech } from '../services/openai-tts';
+
 
 export interface TTSState {
     isGenerating: boolean;
@@ -67,9 +68,11 @@ export function useTTS() {
 
     /**
      * Generate and play TTS audio
+     * @param text The text to speak
+     * @param onPlaybackStart Optional callback triggered when audio starts playing
      * Returns a Promise that resolves when audio playback finishes
      */
-    const speak = useCallback(async (text: string): Promise<void> => {
+    const speak = useCallback(async (text: string, onPlaybackStart?: () => void): Promise<void> => {
         return new Promise(async (resolve, reject) => {
             try {
                 // Reset state
@@ -89,10 +92,17 @@ export function useTTS() {
                 // Play the complete audio
                 setState(prev => ({ ...prev, isGenerating: false, isSpeaking: true }));
                 player.replace({ uri: audioUri });
+
+                // Trigger the callback just before playing
+                if (onPlaybackStart) {
+                    onPlaybackStart();
+                }
+
                 player.play();
 
                 console.log('[TTS] Playing audio');
             } catch (error) {
+
                 console.error('[TTS] Error:', error);
                 setState({
                     isGenerating: false,

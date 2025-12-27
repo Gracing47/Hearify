@@ -49,3 +49,10 @@ export function pulse(): void {
 export function selection(): void {
     Haptics.selectionAsync();
 }
+
+/**
+ * Light haptic for UI toggles
+ */
+export function light(): void {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+}
