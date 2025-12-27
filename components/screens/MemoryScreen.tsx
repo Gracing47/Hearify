@@ -1,30 +1,26 @@
 /**
- * Memory Screen - The Chronicle Bento Grid (formerly MemoryScreen/explore.tsx)
+ * Memory Screen - The Chronicle Bento Grid
+ * Now displayed as a modal overlay, no scroll coordination needed.
  */
 
 import { getAllSnippets } from '@/db';
 import { Snippet } from '@/db/schema';
 import { useContextStore } from '@/store/contextStore';
-import { updateChronicleScroll, useScrollCoordination } from '@/store/scrollCoordination';
 import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
     Platform,
     Pressable,
+    ScrollView,
     StyleSheet,
     Text,
     View
 } from 'react-native';
-import { Gesture, GestureDetector, ScrollView } from 'react-native-gesture-handler';
 import Animated, {
     FadeIn,
     FadeInUp,
-    runOnJS,
-    SharedValue,
-    SlideInRight,
-    useAnimatedScrollHandler
+    SlideInRight
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -48,16 +44,10 @@ const getTypeAccent = (type: string) => {
     }
 };
 
-// Wrapped Component for Reanimated
-const AnimatedScrollView = Animated.createAnimatedComponent(ScrollView);
 
-interface MemoryScreenProps {
-    layoutY?: SharedValue<number>;
-}
 
-export function MemoryScreen({ layoutY }: MemoryScreenProps) {
+export function MemoryScreen() {
     const insets = useSafeAreaInsets();
-    const router = useRouter(); // Keeping router for now
     const [snippets, setSnippets] = useState<Snippet[]>([]);
     const [refreshing, setRefreshing] = useState(false);
     const [filter, setFilter] = useState<'all' | 'fact' | 'feeling' | 'goal'>('all');
@@ -81,17 +71,7 @@ export function MemoryScreen({ layoutY }: MemoryScreenProps) {
         setRefreshing(false);
     };
 
-    // Scroll coordination - direct SharedValue update (zero latency)
-    const { chronicleScrollRef } = useScrollCoordination();
 
-    const scrollHandler = useAnimatedScrollHandler({
-        onScroll: (event) => {
-            'worklet';
-            const { contentOffset, contentSize, layoutMeasurement } = event;
-            // Direct SharedValue update - no runOnJS needed
-            updateChronicleScroll(contentOffset.y, contentSize.height, layoutMeasurement.height);
-        },
-    });
 
     const filteredSnippets = filter === 'all'
         ? snippets
@@ -112,18 +92,13 @@ export function MemoryScreen({ layoutY }: MemoryScreenProps) {
                 style={StyleSheet.absoluteFill}
             />
 
-            <AnimatedScrollView
-                ref={chronicleScrollRef}
+            <ScrollView
                 style={styles.scroll}
                 contentContainerStyle={[
                     styles.scrollContent,
-                    { paddingTop: insets.top + 16, paddingBottom: insets.bottom + 100 }
+                    { paddingTop: 16, paddingBottom: insets.bottom + 100 }
                 ]}
                 showsVerticalScrollIndicator={false}
-                bounces={false}
-                overScrollMode="never"
-                onScroll={scrollHandler}
-                scrollEventThrottle={16}
             >
                 {/* Header with Refresh */}
                 <Animated.View entering={FadeIn} style={styles.header}>
@@ -196,7 +171,7 @@ export function MemoryScreen({ layoutY }: MemoryScreenProps) {
                         ))}
                     </View>
                 )}
-            </AnimatedScrollView>
+            </ScrollView>
         </View>
     );
 }
@@ -232,63 +207,47 @@ interface MemoryCardProps {
     onShowInHorizon: () => void;
 }
 
-// Helper function to switch to orbit screen (for runOnJS)
-const switchToOrbit = () => {
-    useContextStore.getState().setActiveScreen('orbit');
-};
-
 function MemoryCard({ snippet, index, isLarge, onShowInHorizon }: MemoryCardProps) {
     const accent = getTypeAccent(snippet.type);
     const sentimentColor = getSentimentColor(snippet.sentiment);
     const date = new Date(snippet.timestamp);
     const timeAgo = getTimeAgo(date);
 
-    const panGesture = Gesture.Pan()
-        .onEnd((e) => {
-            'worklet';
-            // Swipe UP = Throw to Orbit
-            if (e.translationY < -150 && e.velocityY < -500) {
-                runOnJS(switchToOrbit)();
-            }
-        });
-
     return (
-        <GestureDetector gesture={panGesture}>
-            <Animated.View
-                entering={SlideInRight.delay(index * 50).springify()}
-                style={[
-                    styles.card,
-                    isLarge && styles.cardLarge,
-                    { backgroundColor: accent.bg, borderColor: accent.border }
-                ]}
+        <Animated.View
+            entering={SlideInRight.delay(index * 50).springify()}
+            style={[
+                styles.card,
+                isLarge && styles.cardLarge,
+                { backgroundColor: accent.bg, borderColor: accent.border }
+            ]}
+        >
+            {/* Type Badge + Sentiment Dot */}
+            <View style={styles.cardHeader}>
+                <View style={[styles.typeBadge, { backgroundColor: accent.bg, borderColor: accent.border }]}>
+                    <Text style={[styles.typeBadgeText, { color: accent.text }]}>
+                        {snippet.type.toUpperCase()}
+                    </Text>
+                </View>
+                <View style={[styles.sentimentDot, { backgroundColor: sentimentColor }]} />
+            </View>
+
+            {/* Content */}
+            <Text
+                style={[styles.cardContent, isLarge && styles.cardContentLarge]}
+                numberOfLines={isLarge ? 5 : 3}
             >
-                {/* Type Badge + Sentiment Dot */}
-                <View style={styles.cardHeader}>
-                    <View style={[styles.typeBadge, { backgroundColor: accent.bg, borderColor: accent.border }]}>
-                        <Text style={[styles.typeBadgeText, { color: accent.text }]}>
-                            {snippet.type.toUpperCase()}
-                        </Text>
-                    </View>
-                    <View style={[styles.sentimentDot, { backgroundColor: sentimentColor }]} />
-                </View>
+                {snippet.content}
+            </Text>
 
-                {/* Content */}
-                <Text
-                    style={[styles.cardContent, isLarge && styles.cardContentLarge]}
-                    numberOfLines={isLarge ? 5 : 3}
-                >
-                    {snippet.content}
-                </Text>
-
-                {/* Footer */}
-                <View style={styles.cardFooter}>
-                    <Text style={styles.cardTime}>{timeAgo}</Text>
-                    <Pressable style={styles.horizonButton} onPress={onShowInHorizon}>
-                        <Text style={styles.horizonButtonText}>🌌 View</Text>
-                    </Pressable>
-                </View>
-            </Animated.View>
-        </GestureDetector>
+            {/* Footer */}
+            <View style={styles.cardFooter}>
+                <Text style={styles.cardTime}>{timeAgo}</Text>
+                <Pressable style={styles.horizonButton} onPress={onShowInHorizon}>
+                    <Text style={styles.horizonButtonText}>🌌 View</Text>
+                </Pressable>
+            </View>
+        </Animated.View>
     );
 }
 

@@ -1,8 +1,6 @@
 import { findSimilarSnippets, getDb } from '@/db';
 import { useCTC } from '@/store/CognitiveTempoController';
 import { useContextStore } from '@/store/contextStore';
-import { useMissionControl } from '@/store/missionControl';
-import { IntelligenceService } from './intelligence';
 
 // Birth energy is modulated by CTC state
 
@@ -48,7 +46,6 @@ class SatelliteInsertEngine {
         // Queue background operations
         this.insertQueue.add(() => this.computeSemanticEdges(snippetId, embeddingRich));
         this.insertQueue.add(() => this.updateClusterCentroids(snippetId));
-        this.insertQueue.add(() => IntelligenceService.runClustering());
 
         // After processing, trigger Horizon refresh with birth energy
         setTimeout(() => {
@@ -58,10 +55,6 @@ class SatelliteInsertEngine {
             try {
                 // 🚀 HOLOGRAPHIC SYNC: Trigger Horizon to reload nodes
                 useContextStore.getState().triggerNodeRefresh();
-
-                useMissionControl.getState().updateTelemetry({
-                    lastInsertMs: duration
-                });
             } catch (e) {
                 // Store might not be ready
             }

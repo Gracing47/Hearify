@@ -1,25 +1,25 @@
 /**
- * Orbit Screen - The Neural AI Companion Interface (formerly HomeScreen)
+ * Orbit Screen - The Neural AI Companion Interface
  */
 
 import { DeltaCard } from '@/components/DeltaCard';
-import { NeuralConfirmation } from '@/components/NeuralConfirmation';
 import { NeuralOrb } from '@/components/NeuralOrb';
 import { NeuralThinking } from '@/components/NeuralThinking';
 import { BurgerMenuButton, SideMenu } from '@/components/SideMenu';
 import { areKeysConfigured } from '@/config/api';
-import { findSimilarSnippets, insertSnippet } from '@/db';
+import { findSimilarSnippets } from '@/db';
 import { useTTS } from '@/hooks/useTTS';
 import { useVoiceCapture } from '@/hooks/useVoiceCapture';
 import { processWithReasoning } from '@/services/deepseek';
 import { DailyDelta, generateYesterdayDelta, getDeltaForDate } from '@/services/DeltaService';
 import { getFastResponse } from '@/services/fastchat';
 import { transcribeAudio } from '@/services/groq';
-import { generateEmbedding, generateEmbeddings } from '@/services/openai';
+import { computeFocusTarget } from '@/services/LiveFocusService';
+import { generateEmbedding } from '@/services/openai';
+import { saveSnippetWithDedup } from '@/services/SemanticDedupService';
 import { useContextStore } from '@/store/contextStore';
 import { useConversationStore } from '@/store/conversation';
 import { useProfileStore } from '@/store/profile';
-import { updateOrbitScroll, useScrollCoordination } from '@/store/scrollCoordination';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
     ActivityIndicator,
@@ -37,7 +37,6 @@ import Animated, {
     FadeInUp,
     interpolate,
     SharedValue,
-    useAnimatedScrollHandler,
     useAnimatedStyle,
     useSharedValue,
     withRepeat,
@@ -78,9 +77,6 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
         isReasoning,
         isEmbedding,
         isSpeaking,
-        pendingSnippets,
-        addPendingSnippet,
-        removePendingSnippet,
     } = useConversationStore();
 
     const { currentProfile } = useProfileStore();
@@ -106,18 +102,9 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
         transform: [{ scale: recordButtonScale.value }],
     }));
 
-    // Scroll coordination for pager handoff
-    const { orbitScrollRef } = useScrollCoordination();
+    // Scroll ref for auto-scroll to end
+    const scrollRef = React.useRef<any>(null);
     const AnimatedScrollView = Animated.createAnimatedComponent(ScrollView);
-
-    const orbitScrollHandler = useAnimatedScrollHandler({
-        onScroll: (event) => {
-            'worklet';
-            const { contentOffset, contentSize, layoutMeasurement } = event;
-            // Direct SharedValue update - zero latency, no runOnJS needed
-            updateOrbitScroll(contentOffset.y, contentSize.height, layoutMeasurement.height);
-        },
-    });
 
     const insets = useSafeAreaInsets();
     const { height: SCREEN_HEIGHT } = Dimensions.get('window');
@@ -126,18 +113,18 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     const heroOrbStyle = useAnimatedStyle(() => {
         if (!layoutY) return {};
 
-        // As layoutY goes from 0 to SCREEN_HEIGHT (Horizon Screen)
+        // As layoutY goes from 0 to -SCREEN_HEIGHT (Horizon Screen)
         const scale = interpolate(
-            layoutY.value,
-            [0, SCREEN_HEIGHT],
-            [1, 15], // Radical zoom into the "Neural Matrix"
+            Number(layoutY.value),
+            [-SCREEN_HEIGHT, 0],
+            [15, 1], // Radical zoom into the "Neural Matrix"
             Extrapolate.CLAMP
         );
 
         const opacity = interpolate(
-            layoutY.value,
-            [0, SCREEN_HEIGHT * 0.5, SCREEN_HEIGHT],
-            [1, 0.8, 0], // Dissolve into the stars
+            Number(layoutY.value),
+            [-SCREEN_HEIGHT, -SCREEN_HEIGHT * 0.5, 0],
+            [0, 0.8, 1], // Dissolve into the stars
             Extrapolate.CLAMP
         );
 
@@ -217,8 +204,13 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                 setAppState('idle');
                 Alert.alert('Error', 'Failed to process audio');
             }
+        } else if (appState === 'speaking') {
+            // 🛑 INTERRUPT: Stop AI speaking immediately
+            tts.stop();
+            setAppState('idle');
+            Haptics.listening(); // Subtle haptic to confirm stop
         }
-    }, [appState, voiceCapture, isKeysConfigured]);
+    }, [appState, voiceCapture, isKeysConfigured, tts]);
 
     const processAudio = useCallback(async (audioUri: string) => {
         try {
@@ -231,8 +223,8 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
             addUserMessage(transcript);
 
             setEmbedding(true); // Re-use embedding state for retrieval feedback
-            const [queryEmbed, isChattyQuery] = await Promise.all([
-                generateEmbedding(transcript, 'text-embedding-3-large', 1536),
+            const [{ rich: queryEmbed }, isChattyQuery] = await Promise.all([
+                generateEmbedding(transcript),
                 Promise.resolve(
                     transcript.split(' ').length < 15 &&
                     !/will|muss|soll|ziel|plan|merke|notier|fakt|wichtig|wahr|wer|was|erinnerst|weißt/i.test(transcript)
@@ -242,8 +234,27 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
             // 🔥 Sync focus vector to global store
             useContextStore.getState().setFocusVector(queryEmbed);
 
+            // 🚀 PRE-COGNITION: Compute live focus target for Horizon camera drift
+            // This runs async and updates the store — Horizon will pick it up
+            computeFocusTarget(transcript).then(target => {
+                if (target) {
+                    useContextStore.getState().setLiveFocusTarget({
+                        x: target.x,
+                        y: target.y,
+                        confidence: target.confidence
+                    });
+                }
+            });
+
             const similarSnippets = await findSimilarSnippets(queryEmbed, 5);
-            const context = similarSnippets.map(s => s.content);
+
+            // 🧠 High-Context formatting for the AI
+            const context = similarSnippets.map(s => {
+                const date = new Date(s.timestamp);
+                const timeAgo = Math.floor((Date.now() - s.timestamp) / (1000 * 60 * 60 * 24));
+                const temporalHeader = timeAgo === 0 ? "Heute" : timeAgo === 1 ? "Gestern" : `${timeAgo} Tage her`;
+                return `[${s.type.toUpperCase()} | ${s.topic} | ${temporalHeader}]: ${s.content}`;
+            });
             setEmbedding(false);
 
             console.log('[Neural Loop] Step 3: Neural Path Execution...');
@@ -251,14 +262,25 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
             let finalReasoning = '';
             let snippets: any[] = [];
 
+            // 🧠 Transform history for AI consistency
+            const history = messages.map(m => ({
+                role: m.role as 'user' | 'assistant',
+                content: m.content
+            }));
+
             if (isChattyQuery) {
                 console.log('[Neural Loop] Executing Fast Path (Groq)...');
-                const fastResponse = await getFastResponse(transcript, currentProfile?.name, context);
+                const fastResponse = await getFastResponse(
+                    transcript,
+                    currentProfile?.name,
+                    context,
+                    history
+                );
 
                 if (fastResponse.toLowerCase().includes('thinking')) {
                     console.log('[Neural Loop] Fast Path suggested reasoning. Switching...');
                     setReasoning(true);
-                    const result = await processWithReasoning(transcript, context);
+                    const result = await processWithReasoning(transcript, context, history);
                     finalResponse = result.response;
                     finalReasoning = result.reasoning;
                     snippets = result.snippets;
@@ -269,42 +291,32 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
             } else {
                 console.log('[Neural Loop] Executing Reasoning Path (DeepSeek)...');
                 setReasoning(true);
-                const result = await processWithReasoning(transcript, context);
+                const result = await processWithReasoning(transcript, context, history);
                 finalResponse = result.response;
                 finalReasoning = result.reasoning;
                 snippets = result.snippets;
                 setReasoning(false);
             }
 
-            console.log('[Neural Loop] Step 4: Embedding snippets (Dual-Tier)...');
+            console.log('[Neural Loop] Step 4: Saving snippets with Semantic Deduplication...');
             setEmbedding(true);
             if (snippets.length > 0) {
-                const contents = snippets.map(s => s.content);
-
-                // Generate both tiers for maximum performance/context balance
-                const [richEmbeds, fastEmbeds] = await Promise.all([
-                    generateEmbeddings(contents, 'text-embedding-3-large', 1536),
-                    generateEmbeddings(contents, 'text-embedding-3-small', 384)
-                ]);
-
-                for (let i = 0; i < snippets.length; i++) {
-                    const snippet = snippets[i];
-                    await insertSnippet(
-                        snippet.content,
-                        snippet.type,
-                        richEmbeds[i],
-                        fastEmbeds[i],
-                        snippet.sentiment,
-                        snippet.topic
-                    );
-                    addPendingSnippet({ type: snippet.type, content: snippet.content });
+                // 🧠 NEW: Use SemanticDedupService for intelligent storage
+                // This handles embedding, similarity check, and smart merge
+                for (const snippet of snippets) {
+                    await saveSnippetWithDedup({
+                        content: snippet.content,
+                        type: snippet.type,
+                        sentiment: snippet.sentiment,
+                        topic: snippet.topic,
+                        reasoning: finalReasoning,
+                    });
                 }
             }
             setEmbedding(false);
 
-            // 🚀 HOLOGRAPHIC SYNC: Background processing (Clustering, Semantic Edges, Centroids)
-            // is handled automatically inside insertSnippet -> SatelliteInsertEngine.
-            console.log('[Neural Loop] Handing off to Satellite Engine via insertSnippet...');
+            // Note: SatelliteInsertEngine is triggered inside saveSnippetWithDedup
+            console.log('[Neural Loop] Semantic Deduplication complete.');
 
             console.log('[Neural Loop] Step 5: Speaking...');
 
@@ -345,21 +357,13 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     // Auto-scroll to bottom on new messages
     useEffect(() => {
         setTimeout(() => {
-            orbitScrollRef.current?.scrollToEnd({ animated: true });
+            scrollRef.current?.scrollToEnd({ animated: true });
         }, 100);
     }, [messages]);
 
     return (
         <View style={styles.container}>
-            {/* Neural Confirmation Overlays */}
-            {pendingSnippets.map((snippet) => (
-                <NeuralConfirmation
-                    key={snippet.id}
-                    type={snippet.type}
-                    content={snippet.content}
-                    onComplete={() => removePendingSnippet(snippet.id)}
-                />
-            ))}
+            {/* Note: Confirmations now handled by ToastContainer in MindLayout */}
 
             <View style={[styles.safeArea, { paddingTop: insets.top }]}>
                 {/* Side Menu */}
@@ -411,13 +415,12 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                 ) : (
                     /* Scrollable Messages */
                     <AnimatedScrollView
-                        ref={orbitScrollRef}
+                        ref={scrollRef}
                         style={styles.messageList}
                         contentContainerStyle={styles.messageListContent}
                         showsVerticalScrollIndicator={false}
-                        onScroll={orbitScrollHandler}
                         scrollEventThrottle={16}
-                        onContentSizeChange={() => orbitScrollRef.current?.scrollToEnd({ animated: true })}
+                        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
                     >
                         {messages.map((msg, idx) => (
                             <Animated.View
@@ -432,12 +435,6 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                                     styles.messageBubble,
                                     msg.role === 'user' ? styles.userBubble : styles.aiBubble
                                 ]}>
-                                    {msg.role === 'assistant' && msg.reasoning && (
-                                        <View style={styles.reasoningBox}>
-                                            <Text style={styles.reasoningLabel}>💭 THOUGHTS</Text>
-                                            <Text style={styles.reasoningText}>{msg.reasoning}</Text>
-                                        </View>
-                                    )}
                                     <Text style={styles.messageText}>{msg.content}</Text>
                                 </View>
                             </Animated.View>

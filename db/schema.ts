@@ -20,6 +20,7 @@ export interface Snippet {
   importance: number;
   connection_count: number;
   last_accessed: number | null;
+  reasoning?: string;
 }
 
 /**
@@ -42,7 +43,8 @@ export const SCHEMA = {
       connection_count INTEGER DEFAULT 0,
       last_accessed INTEGER,
       cluster_id INTEGER,
-      cluster_label TEXT
+      cluster_label TEXT,
+      reasoning TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_snippets_type ON snippets(type);
     CREATE INDEX IF NOT EXISTS idx_snippets_cluster ON snippets(cluster_id);
@@ -147,7 +149,8 @@ export const SCHEMA = {
     `ALTER TABLE snippets ADD COLUMN importance REAL DEFAULT 1.0;`,
     `ALTER TABLE snippets ADD COLUMN connection_count INTEGER DEFAULT 0;`,
     `ALTER TABLE snippets ADD COLUMN last_accessed INTEGER;`,
-    `ALTER TABLE snippets ADD COLUMN cluster_label TEXT;`
+    `ALTER TABLE snippets ADD COLUMN cluster_label TEXT;`,
+    `ALTER TABLE snippets ADD COLUMN reasoning TEXT;`
   ]
 };
 

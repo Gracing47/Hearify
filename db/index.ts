@@ -35,6 +35,7 @@ export async function ensureDatabaseReady(dbName?: string): Promise<DB> {
     return initializationPromise;
 }
 
+
 /**
  * Internal initialization - runs schema, migrations, and backfill
  */
@@ -98,7 +99,7 @@ async function initDatabaseInternal(targetDbName: string): Promise<DB> {
 
         // Mark as fully initialized
         isInitialized = true;
-        const duration = Date.now() - startTime;
+        const duration = Date.now() - (startTime as number);
         console.log(`[DB] ✅ Database fully initialized in ${duration}ms`);
 
         return db;
@@ -148,8 +149,9 @@ export async function insertSnippet(
     embeddingFast?: Float32Array,
     sentiment: 'analytical' | 'positive' | 'creative' | 'neutral' = 'neutral',
     topic: string = 'misc',
-    x: number = Math.random() * 400 - 200,
-    y: number = Math.random() * 400 - 200
+    x: number = (Math.random() * 400) - 200,
+    y: number = (Math.random() * 400) - 200,
+    reasoning?: string
 ): Promise<number> {
     const database = getDb();
     const timestamp = Date.now();
@@ -157,8 +159,8 @@ export async function insertSnippet(
     try {
         // 1. Insert into main table with sentiment and topic
         const result = await database.execute(
-            'INSERT INTO snippets (content, type, sentiment, topic, timestamp, x, y) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            [content, type, sentiment, topic, timestamp, x, y]
+            'INSERT INTO snippets (content, type, sentiment, topic, timestamp, x, y, reasoning) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            [content, type, sentiment, topic, timestamp, x, y, reasoning ?? null]
         );
 
         const snippetId = result.insertId!;
@@ -226,7 +228,7 @@ export async function findSimilarSnippets(
 
         const results = await database.execute(query, [queryEmbedding, limit]);
 
-        const elapsed = Date.now() - startTime;
+        const elapsed = Date.now() - (startTime as number);
         console.log(`[DB] Native Vector Search completed in ${elapsed}ms`);
 
         return (results.rows as unknown as Snippet[]) || [];

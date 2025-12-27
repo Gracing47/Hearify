@@ -101,10 +101,10 @@ export function HorizonScreen({ layoutY }: HorizonScreenProps) {
                     >
                         <View style={styles.titleSection}>
                             <Text style={styles.title}>Horizon</Text>
-                            <View style={styles.liveIndicator}>
-                                <Animated.View style={[styles.liveDot, pulseStyle]} />
+                            <Animated.View style={[styles.liveIndicator, pulseStyle]}>
+                                <View style={styles.liveDot} />
                                 <Text style={styles.liveText}>LIVE</Text>
-                            </View>
+                            </Animated.View>
                         </View>
 
                         {/* 
@@ -179,21 +179,21 @@ function StatsContent({
                 <StatItem
                     label="FACTS"
                     value={stats.facts}
-                    color="#10b981"
+                    color="#22d3ee"
                     isActive={currentFilter === 'fact'}
                     onPress={() => onFilterChange(currentFilter === 'fact' ? 'all' : 'fact')}
                 />
                 <StatItem
                     label="FEELINGS"
                     value={stats.feelings}
-                    color="#a855f7"
+                    color="#e879f9"
                     isActive={currentFilter === 'feeling'}
                     onPress={() => onFilterChange(currentFilter === 'feeling' ? 'all' : 'feeling')}
                 />
                 <StatItem
                     label="GOALS"
                     value={stats.goals}
-                    color="#f59e0b"
+                    color="#fde047"
                     isActive={currentFilter === 'goal'}
                     onPress={() => onFilterChange(currentFilter === 'goal' ? 'all' : 'goal')}
                 />
@@ -319,16 +319,20 @@ const styles = StyleSheet.create({
     // Bottom Stats Panel
     statsPanel: {
         position: 'absolute',
-        bottom: 0,
-        left: 16,
-        right: 16,
+        bottom: 24,
+        left: 20,
+        right: 20,
         zIndex: 100,
+        shadowColor: '#6366f1',
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.15,
+        shadowRadius: 20,
     },
     statsPanelBlur: {
-        borderRadius: 24,
+        borderRadius: 28,
         overflow: 'hidden',
-        borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.08)',
+        borderWidth: 1.5,
+        borderColor: 'rgba(255, 255, 255, 0.12)',
     },
     statsPanelAndroid: {
         backgroundColor: 'rgba(22, 22, 28, 0.95)',
@@ -339,8 +343,9 @@ const styles = StyleSheet.create({
     statsRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        paddingVertical: 24,
-        paddingHorizontal: 24,
+        paddingVertical: 20,
+        paddingHorizontal: 20,
+        backgroundColor: 'rgba(255, 255, 255, 0.03)',
     },
     primaryStat: {
         width: 100, // Fixed width to prevent pushing others

@@ -14,7 +14,7 @@ import {
 } from '@shopify/react-native-skia';
 import React, { useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Dimensions, StyleSheet, Text, View } from 'react-native';
-import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import {
     Extrapolate,
     interpolate,
@@ -27,7 +27,6 @@ import { getAllClusters, getAllEdges, getDb, isDatabaseReady } from '../db';
 import { Snippet } from '../db/schema';
 import { useCTC } from '../store/CognitiveTempoController';
 import { useContextStore } from '../store/contextStore';
-import { FilmGrainOverlay } from './visuals/FilmGrain';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -97,6 +96,12 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
     // 4. Trinity Sync Subscription
     const nodeRefreshTrigger = useContextStore((state) => state.nodeRefreshTrigger);
     const activeFocusNodeId = useContextStore((state) => state.focusNodeId);
+    const liveFocusTarget = useContextStore((state) => state.liveFocusTarget);
+
+    // 5. Pre-Cognition Camera Drift Target
+    const driftTargetX = useSharedValue(0);
+    const driftTargetY = useSharedValue(0);
+    const driftConfidence = useSharedValue(0);
 
     // 5. CTC Limits (Cognitive Tempo Control)
     const ctcMaxVelocity = useSharedValue(30);
@@ -110,6 +115,15 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
         ctcBloomCap.value = ctcLimits.bloomIntensityCap;
         ctcEdgeActivity.value = ctcLimits.edgeActivityLevel;
     }, [ctcLimits]);
+
+    // 🚀 PRE-COGNITION: Sync live focus target to shared values
+    useEffect(() => {
+        if (liveFocusTarget) {
+            driftTargetX.value = liveFocusTarget.x;
+            driftTargetY.value = liveFocusTarget.y;
+            driftConfidence.value = liveFocusTarget.confidence;
+        }
+    }, [liveFocusTarget]);
 
     // --- DATA BOOTSTRAP (SpaceX Pre-Flight) ---
     useEffect(() => {
@@ -169,8 +183,16 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
         const alpha = 0.08; // EWMA Focus Smoothing
 
         // Stabilize Focus Vector (EWMA)
-        stableFocusX.value = stableFocusX.value + (rawFocusX.value - stableFocusX.value) * alpha;
-        stableFocusY.value = stableFocusY.value + (rawFocusY.value - stableFocusY.value) * alpha;
+        stableFocusX.value = Number(stableFocusX.value) + (Number(rawFocusX.value) - Number(stableFocusX.value)) * alpha;
+        stableFocusY.value = Number(stableFocusY.value) + (Number(rawFocusY.value) - Number(stableFocusY.value)) * alpha;
+
+        // 🚀 PRE-COGNITION: Gentle camera drift towards live focus target
+        // Only drift if confidence is high and user isn't actively panning
+        const driftAlpha = 0.02; // Very gentle (subliminal)
+        if (driftConfidence.value > 0.7) {
+            translateX.value += (driftTargetX.value - translateX.value) * driftAlpha;
+            translateY.value += (driftTargetY.value - translateY.value) * driftAlpha;
+        }
 
         const curX = posX.value;
         const curY = posY.value;
@@ -242,15 +264,17 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
 
     const gesture = Gesture.Simultaneous(
         Gesture.Pan()
+            .activeOffsetX([-10, 10]) // Don't snatch small horizontal moves
+            .activeOffsetY([-15, 15]) // Don't snatch navigation swipes (parent handles them)
             .onStart(() => {
                 'worklet';
-                // CTC Touch on gesture start (runOnJS not needed - we'll use effect)
             })
             .onChange(e => {
                 'worklet';
-                // Phase A1: Camera Governance - only translate if CTC allows
+                // Only pan the canvas if the movement is not a clear navigation attempt
+                // (Parent MindLayout has activation threshold of 8)
+
                 if (!ctcAllowTranslation.value) {
-                    // AWARENESS mode: only allow rotation-like subtle drift
                     rawFocusX.value -= e.changeX * 0.1;
                     rawFocusY.value -= e.changeY * 0.1;
                     return;
@@ -258,7 +282,6 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
 
                 translateX.value += e.changeX / scale.value;
                 translateY.value += e.changeY / scale.value;
-                // Shift focus inversely for parallax feel
                 rawFocusX.value -= e.changeX * 0.3;
                 rawFocusY.value -= e.changeY * 0.3;
             }),
@@ -289,7 +312,7 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
     );
 
     return (
-        <GestureHandlerRootView style={styles.container}>
+        <View style={styles.container}>
             <GestureDetector gesture={gesture}>
                 <Canvas style={styles.canvas}>
                     <Shader source={backgroundShader} uniforms={backgroundUniforms} />
@@ -316,8 +339,7 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
                     </Group>
                 </Canvas>
             </GestureDetector>
-            <FilmGrainOverlay width={SCREEN_WIDTH} height={SCREEN_HEIGHT} />
-        </GestureHandlerRootView>
+        </View>
     );
 };
 
@@ -348,10 +370,10 @@ const NeuralEdge = ({ s, t, nodes, posX, posY, time, edgeActivityLevel }: any) =
             return 0.03;
         } else if (level === 1) {
             // BREATHING: Subtle pulse
-            return 0.06 + Math.sin(time.value * 1.5) * 0.02;
+            return 0.06 + Math.sin(Number(time.value) * 1.5) * 0.02;
         } else {
             // ACTIVE: Full visibility with pulse
-            return 0.12 + Math.sin(time.value * 3) * 0.04;
+            return 0.12 + Math.sin(Number(time.value) * 3) * 0.04;
         }
     });
 
@@ -364,19 +386,29 @@ const NeuralEdge = ({ s, t, nodes, posX, posY, time, edgeActivityLevel }: any) =
     );
 };
 
-const NeuralNode = ({ i, node, posX, posY, scale, time, isActive }: any) => {
+const NeuralNode = ({ i, node, posX, posY, scale, time, isActive }: { i: number, node: Snippet, posX: any, posY: any, scale: any, time: any, isActive: boolean }) => {
     const color = TYPE_COLORS[node.type] || TYPE_COLORS.fact;
 
     const x = useDerivedValue(() => posX.value[i] ?? 0);
     const y = useDerivedValue(() => posY.value[i] ?? 0);
 
+    // 🧠 Multi-layered pulse for "Neural" feel
     const radius = useDerivedValue(() => {
-        const base = isActive ? 14 : 8;
-        const pulse = 1 + Math.sin(time.value * 3 + i) * 0.1;
-        return base * pulse;
+        const base = isActive ? 14 : 7;
+        const timeVal = Number(time.value);
+        const mainPulse = Math.sin(timeVal * 2.5 + i) * 0.15;
+        const microPulse = Math.sin(timeVal * 8 + i * 0.5) * 0.05;
+        return base * (1 + mainPulse + microPulse);
     });
 
-    const glowRadius = useDerivedValue(() => radius.value * 2.5);
+    const auraIntensity = useDerivedValue(() => {
+        return 0.2 + Math.sin(Number(time.value) * 1.5 + i * 0.8) * 0.1;
+    });
+
+    const glowRadius = useDerivedValue(() => radius.value * 3.5);
+    const outerGlowRadius = useDerivedValue(() => glowRadius.value * 1.2);
+    const sparkleRadius = useDerivedValue(() => radius.value * 0.4);
+    const auraOpacity = useDerivedValue(() => auraIntensity.value * 0.4);
 
     const opacity = useDerivedValue(() => {
         return interpolate(scale.value, [0.2, 0.5], [0.5, 1.0], Extrapolate.CLAMP);
@@ -384,14 +416,23 @@ const NeuralNode = ({ i, node, posX, posY, scale, time, isActive }: any) => {
 
     return (
         <Group opacity={opacity}>
-            {/* Outer Glow */}
-            <Circle cx={x} cy={y} r={glowRadius} color={color} opacity={0.15}>
-                <Blur blur={12} />
+            {/* 1. Distant Breathing Aura */}
+            <Circle cx={x} cy={y} r={outerGlowRadius} color={color} opacity={auraOpacity}>
+                <Blur blur={25} />
             </Circle>
-            {/* Core */}
+
+            {/* 2. Proximity Glow */}
+            <Circle cx={x} cy={y} r={glowRadius} color={color} opacity={0.2}>
+                <Blur blur={14} />
+            </Circle>
+
+            {/* 3. The Core Presence */}
             <Circle cx={x} cy={y} r={radius} color={color}>
-                <Blur blur={isActive ? 3 : 0} />
+                {isActive && <Blur blur={4} />}
             </Circle>
+
+            {/* 4. Neural Sparkle (Internal Reflection) */}
+            <Circle cx={x} cy={y} r={sparkleRadius} color="#ffffff" opacity={0.5} />
         </Group>
     );
 };

@@ -1,11 +1,15 @@
 /**
- * 🧠 MindLayout — Dual Navigation System v3.0
+ * 🧠 MindLayout — Dual Navigation System v3.1
  * 
- * Simplified navigation:
+ * Enhanced smooth swipe experience:
  * - Vertical swipe: Orbit ↔ Horizon (Neural Canvas)
  * - Chronicle Button: Opens Memory as modal overlay
  * 
- * No more scroll conflicts! 🎉
+ * Improvements:
+ * - Rubber-band resistance at edges
+ * - Predictive snap points based on velocity
+ * - Smoother spring physics
+ * - Better touch response
  */
 
 import * as Haptics from 'expo-haptics';
@@ -13,10 +17,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Dimensions, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import {
     Gesture,
-    GestureDetector,
-    GestureStateChangeEvent,
-    GestureUpdateEvent,
-    PanGestureHandlerEventPayload
+    GestureDetector
 } from 'react-native-gesture-handler';
 import Animated, {
     Extrapolate,
@@ -36,47 +37,64 @@ import { MemoryScreen } from '@/components/screens/MemoryScreen';
 import { OrbitScreen } from '@/components/screens/OrbitScreen';
 import { useCTC } from '@/store/CognitiveTempoController';
 import { useContextStore } from '@/store/contextStore';
+import { ToastContainer } from '../ToastContainer';
 
 const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
-// --- Configuration ---
+// --- Enhanced Configuration ---
 const SPRING_CONFIG = {
-    damping: 25,
-    stiffness: 180,
-    mass: 0.8,
+    damping: 30,           // More dampened for a premium feel
+    stiffness: 150,        // Slightly softer
+    mass: 1.0,             // Natural weight
     overshootClamping: false,
+    restDisplacementThreshold: 0.01,
+    restSpeedThreshold: 0.01,
 };
 
 const GESTURE_CONFIG = {
-    activationThreshold: 20,
-    resistanceThreshold: 50,
-    velocityThreshold: 600,
-    snapThreshold: 0.3,
+    activationThreshold: 10,     // Slightly higher to prevent jitter
+    velocityThreshold: 600,      // Higher threshold for intentional flings
+    snapThreshold: 0.25,         // Snap earlier
+    rubberBandFactor: 0.3,       // More resistance at edges
+};
+
+// Rubber-band effect: adds resistance when dragging beyond bounds
+const applyRubberBand = (value: number, min: number, max: number, factor: number) => {
+    'worklet';
+    if (value < min) {
+        const diff = min - value;
+        return min - diff * factor;
+    }
+    if (value > max) {
+        const diff = value - max;
+        return max + diff * factor;
+    }
+    return value;
 };
 
 export const MindLayout = () => {
     const translateY = useSharedValue(0);
     const startY = useSharedValue(0);
-    const gestureActive = useSharedValue(false);
 
-    // Memory modal state
     const [memoryVisible, setMemoryVisible] = useState(false);
-
     const activeScreen = useContextStore(state => state.activeScreen);
 
-    // Sync with activeScreen for programmatic navigation (Orbit ↔ Horizon only)
+    // Sync with activeScreen (only for initial load or external state changes)
     useEffect(() => {
         if (activeScreen === 'memory') {
-            // Open modal instead of swiping
             setMemoryVisible(true);
-        } else {
-            const target = activeScreen === 'horizon' ? SCREEN_HEIGHT : 0;
+            return;
+        }
+
+        const target = activeScreen === 'horizon' ? -SCREEN_HEIGHT : 0;
+        // Check if we are already there to avoid unnecessary animations
+        if (Math.abs(translateY.value - target) > 1) {
             translateY.value = withSpring(target, SPRING_CONFIG);
         }
     }, [activeScreen]);
 
     const haptic = useCallback(() => {
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }, []);
 
     const setScreen = useCallback((screen: 'orbit' | 'horizon') => {
@@ -99,56 +117,64 @@ export const MindLayout = () => {
         useCTC.getState().exitReflection();
     }, []);
 
-    // Simplified pan gesture: Only Orbit ↔ Horizon
+    // Enhanced pan gesture with rubber-banding
     const panGesture = Gesture.Pan()
         .activeOffsetY([-GESTURE_CONFIG.activationThreshold, GESTURE_CONFIG.activationThreshold])
+        .failOffsetX([-50, 50]) // Much more forgiving for non-perfect vertical swipes
         .onStart(() => {
             'worklet';
             startY.value = translateY.value;
-            gestureActive.value = false;
         })
-        .onUpdate((event: GestureUpdateEvent<PanGestureHandlerEventPayload>) => {
+        .onUpdate((event) => {
             'worklet';
             const { translationY } = event;
 
-            // Resistance threshold
-            if (!gestureActive.value && Math.abs(translationY) < GESTURE_CONFIG.resistanceThreshold) {
-                return;
-            }
+            // Calculate raw next position
+            let nextY = startY.value + translationY;
 
-            gestureActive.value = true;
+            // Apply rubber-band resistance at edges
+            nextY = applyRubberBand(
+                nextY,
+                -SCREEN_HEIGHT,
+                0,
+                GESTURE_CONFIG.rubberBandFactor
+            );
 
-            // Apply movement with resistance
-            const resisted = translationY > 0
-                ? translationY - GESTURE_CONFIG.resistanceThreshold
-                : translationY + GESTURE_CONFIG.resistanceThreshold;
-
-            // Clamp between 0 (Orbit) and SCREEN_HEIGHT (Horizon)
-            let nextY = startY.value + resisted * 0.7;
-            nextY = Math.max(0, Math.min(SCREEN_HEIGHT, nextY));
             translateY.value = nextY;
         })
-        .onEnd((event: GestureStateChangeEvent<PanGestureHandlerEventPayload>) => {
+        .onEnd((event) => {
             'worklet';
-            if (!gestureActive.value) {
-                return;
-            }
-
-            gestureActive.value = false;
-
             const { velocityY } = event;
             const position = translateY.value;
-            const threshold = SCREEN_HEIGHT * GESTURE_CONFIG.snapThreshold;
 
-            // Simple binary decision: Orbit or Horizon
-            let target: 'orbit' | 'horizon' = position > threshold ? 'horizon' : 'orbit';
+            // Clamp position back to valid range for target calculation
+            const clampedPosition = Math.max(-SCREEN_HEIGHT, Math.min(0, position));
 
-            // Fling override
-            if (Math.abs(velocityY) > GESTURE_CONFIG.velocityThreshold) {
-                target = velocityY > 0 ? 'horizon' : 'orbit';
+            // Predictive target: where would we land based on velocity?
+            const predictedTarget = clampedPosition + velocityY * 0.15;
+
+            let targetValue: number;
+            let targetScreen: 'orbit' | 'horizon';
+
+            // Determination based on prediction and current position
+            if (predictedTarget < -SCREEN_HEIGHT * 0.5) {
+                targetValue = -SCREEN_HEIGHT;
+                targetScreen = 'horizon';
+            } else {
+                targetValue = 0;
+                targetScreen = 'orbit';
             }
 
-            runOnJS(setScreen)(target);
+            // Execute "Liquid Snap" using current velocity
+            translateY.value = withSpring(targetValue, {
+                ...SPRING_CONFIG,
+                velocity: velocityY
+            }, (isFinished) => {
+                if (isFinished) {
+                    runOnJS(setScreen)(targetScreen);
+                }
+            });
+
             runOnJS(haptic)();
         });
 
@@ -156,33 +182,71 @@ export const MindLayout = () => {
         transform: [{ translateY: translateY.value }],
     }));
 
-    const orbitStyle = useAnimatedStyle(() => ({
-        opacity: interpolate(translateY.value, [0, SCREEN_HEIGHT * 0.5], [1, 0], Extrapolate.CLAMP),
-        transform: [{ scale: interpolate(translateY.value, [0, SCREEN_HEIGHT], [1, 0.92], Extrapolate.CLAMP) }],
-    }));
+    // Orbit: fade out smoothly as we swipe up
+    const orbitStyle = useAnimatedStyle(() => {
+        const fadeStart = -SCREEN_HEIGHT * 0.2;
+        const opacity = interpolate(
+            translateY.value,
+            [-SCREEN_HEIGHT * 0.4, fadeStart, 0],
+            [0, 0.5, 1],
+            Extrapolate.CLAMP
+        );
 
-    const horizonStyle = useAnimatedStyle(() => ({
-        opacity: interpolate(translateY.value, [SCREEN_HEIGHT * 0.15, SCREEN_HEIGHT], [0, 1], Extrapolate.CLAMP),
-    }));
+        const scale = interpolate(
+            translateY.value,
+            [-SCREEN_HEIGHT, 0],
+            [0.94, 1],
+            Extrapolate.CLAMP
+        );
+
+        return {
+            opacity,
+            transform: [{ scale }],
+        };
+    });
+
+    // Horizon: fade in smoothly as we swipe up
+    const horizonStyle = useAnimatedStyle(() => {
+        const fadeEnd = -SCREEN_HEIGHT * 0.8;
+        const opacity = interpolate(
+            translateY.value,
+            [-SCREEN_HEIGHT, fadeEnd, -SCREEN_HEIGHT * 0.2],
+            [1, 1, 0],
+            Extrapolate.CLAMP
+        );
+
+        const scale = interpolate(
+            translateY.value,
+            [-SCREEN_HEIGHT, 0],
+            [1, 0.96],
+            Extrapolate.CLAMP
+        );
+
+        return {
+            opacity,
+            transform: [{ scale }],
+        };
+    });
 
     return (
         <View style={styles.viewport}>
-            {/* Main Navigation: Orbit ↔ Horizon */}
+            <ToastContainer />
+
             <GestureDetector gesture={panGesture}>
                 <Animated.View style={[styles.stack, containerStyle]}>
-                    {/* Horizon (Below Orbit - swipe down to reveal) */}
+                    {/* Horizon (Below) */}
                     <Animated.View style={[styles.screen, styles.horizon, horizonStyle]}>
                         <HorizonScreen layoutY={translateY} />
                     </Animated.View>
 
-                    {/* Orbit (Home - default) */}
+                    {/* Orbit (Home) */}
                     <Animated.View style={[styles.screen, styles.orbit, orbitStyle]}>
                         <OrbitScreen layoutY={translateY} onOpenChronicle={openMemory} />
                     </Animated.View>
                 </Animated.View>
             </GestureDetector>
 
-            {/* 📜 Memory Modal */}
+            {/* Memory Modal */}
             <Modal
                 visible={memoryVisible}
                 animationType="none"
@@ -190,18 +254,17 @@ export const MindLayout = () => {
                 onRequestClose={closeMemory}
             >
                 <Animated.View
-                    entering={FadeIn.duration(200)}
-                    exiting={FadeOut.duration(150)}
+                    entering={FadeIn.duration(400)}
+                    exiting={FadeOut.duration(250)}
                     style={styles.modalBackdrop}
                 >
                     <Pressable style={styles.backdropPressable} onPress={closeMemory} />
 
                     <Animated.View
-                        entering={SlideInDown.springify().damping(20)}
-                        exiting={SlideOutDown.duration(200)}
+                        entering={SlideInDown.springify().damping(28).stiffness(140).mass(0.8)}
+                        exiting={SlideOutDown.duration(300)}
                         style={styles.memoryModal}
                     >
-                        {/* Drag Handle */}
                         <View style={styles.dragHandleContainer}>
                             <View style={styles.dragHandle} />
                             <Text style={styles.modalTitle}>Chronicle</Text>
@@ -210,7 +273,6 @@ export const MindLayout = () => {
                             </Pressable>
                         </View>
 
-                        {/* Memory Content */}
                         <View style={styles.memoryContent}>
                             <MemoryScreen />
                         </View>
@@ -236,14 +298,13 @@ const styles = StyleSheet.create({
         width: '100%',
         position: 'absolute'
     },
-    horizon: {
-        top: -SCREEN_HEIGHT
-    },
     orbit: {
         top: 0
     },
+    horizon: {
+        top: SCREEN_HEIGHT  // Horizon is BELOW Orbit
+    },
 
-    // Modal styles
     modalBackdrop: {
         flex: 1,
         backgroundColor: 'rgba(0, 0, 0, 0.6)',
@@ -300,5 +361,3 @@ const styles = StyleSheet.create({
         flex: 1,
     },
 });
-
-export default MindLayout;

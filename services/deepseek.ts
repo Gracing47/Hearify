@@ -14,12 +14,14 @@ const MODEL = 'deepseek-reasoner';
 
 const CURIOUS_COACH_PROMPT = `You are Hearify, a warm and ultra-intelligent neural companion.
 Your primary mission is to listen, reason, and remember with emotional awareness.
+You have access to the user's "Neural Horizon" - a spatial memory of their life.
 
 STRICT OPERATING PROTOCOL:
 1. Engage in natural, empathetic conversation.
 2. ALWAYS extract key snippets (Facts, Feelings, Goals) from the conversation.
-3. For EACH snippet, analyze its emotional sentiment.
-4. Your answer MUST end with a structured memory block.
+3. Use the provided [NEURAL CONTEXT] and [CURRENT TIME] to be temporally aware.
+4. If the user asks about the past, use the context to provide specific details.
+5. Your answer MUST end with a structured memory block.
 
 MEMORY BLOCK FORMAT:
 [[MEMORY_START]]
@@ -32,20 +34,12 @@ MEMORY BLOCK FORMAT:
 }
 [[MEMORY_END]]
 
-SENTIMENT VALUES:
-- "analytical": Logical, structured (blue)
-- "positive": Happy, success (gold)
-- "creative": Ideas, depth (indigo)
-- "neutral": Dry facts (gray)
-
-TOPIC LOGIC:
-- Assign a ONE-WORD category (e.g. Work, Health, Money, Love, Tech).
-- Be consistent with existing topics if possible.
+SENTIMENT VALUES: "analytical" (blue), "positive" (gold), "creative" (indigo), "neutral" (gray).
+TOPIC: ONE-WORD category.
 
 CRITICAL: 
-- If no NEW fragments are found, provide the block with an empty "snippets" array.
-- NEVER talk about the memory block. Just respond naturally.
-- Be brief and sleek in your JSON content.`;
+- Be brief and sleek.
+- Act as if you have a "live" connection to the user's world.`;
 
 export interface Snippet {
     type: 'fact' | 'feeling' | 'goal';
@@ -65,7 +59,8 @@ export interface ReasoningResult {
  */
 export async function processWithReasoning(
     userInput: string,
-    context: string[] = []
+    context: string[] = [],
+    history: { role: 'user' | 'assistant', content: string }[] = []
 ): Promise<ReasoningResult> {
     const apiKey = await getDeepSeekKey();
     if (!apiKey) throw new Error('DeepSeek API key not configured');
@@ -74,6 +69,12 @@ export async function processWithReasoning(
         const contextStr = context.length > 0
             ? `\n\n[NEURAL CONTEXT]\n${context.join('\n')}`
             : '';
+
+        // Take the last 10 messages for conversational awareness (DeepSeek-R1 is smart but expensive)
+        const recentHistory = history.slice(-10);
+
+        const now = new Date();
+        const timePrompt = `\n[CURRENT TIME] ${now.toLocaleString('de-DE', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`;
 
         const response = await fetch(DEEPSEEK_API_URL, {
             method: 'POST',
@@ -84,7 +85,8 @@ export async function processWithReasoning(
             body: JSON.stringify({
                 model: MODEL,
                 messages: [
-                    { role: 'system', content: CURIOUS_COACH_PROMPT },
+                    { role: 'system', content: CURIOUS_COACH_PROMPT + timePrompt },
+                    ...recentHistory,
                     { role: 'user', content: userInput + contextStr }
                 ],
                 temperature: 0.6,

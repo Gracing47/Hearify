@@ -13,50 +13,58 @@ const OPENAI_EMBEDDING_URL = 'https://api.openai.com/v1/embeddings';
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions';
 
 /**
- * Generate embedding vector for text
+ * Generate embedding vectors for text (Dual-Tier)
  * 
  * @param text - Text to embed
- * @param model - Model name (default: text-embedding-3-large)
- * @param dimensions - Optional dimensions for truncation
- * @returns Float32Array of embedding vector
+ * @returns Object with rich (1536d) and fast (384d) embeddings
  */
 export async function generateEmbedding(
-    text: string,
-    model: string = 'text-embedding-3-large',
-    dimensions?: number
-): Promise<Float32Array> {
+    text: string
+): Promise<{ rich: Float32Array; fast: Float32Array }> {
     const apiKey = await getOpenAIKey();
     if (!apiKey) {
         throw new Error('OpenAI API key not configured');
     }
 
     try {
-        const response = await fetch(OPENAI_EMBEDDING_URL, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model,
-                input: text,
-                ...(dimensions ? { dimensions } : {})
-            }),
-        });
+        // We use text-embedding-3-large and request both dimensions via separate calls 
+        // or one call with maximum dimensions and truncate locally.
+        // Truncation is supported by text-embedding-3 models.
 
-        if (!response.ok) {
-            const error = await response.text();
-            throw new Error(`OpenAI API error: ${error}`);
-        }
+        const fetchLevel = async (dims: number) => {
+            const response = await fetch(OPENAI_EMBEDDING_URL, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${apiKey}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model: 'text-embedding-3-large',
+                    input: text,
+                    dimensions: dims
+                }),
+            });
 
-        const result = await response.json();
-        const embedding = new Float32Array(result.data[0].embedding);
+            if (!response.ok) {
+                const error = await response.text();
+                throw new Error(`OpenAI API error: ${error}`);
+            }
 
-        console.log(`[OpenAI] Generated ${embedding.length}d embedding using ${model}`);
+            const result = await response.json();
+            return new Float32Array(result.data[0].embedding);
+        };
 
-        return embedding;
+        // Parallel fetch for speed
+        const [rich, fast] = await Promise.all([
+            fetchLevel(1536),
+            fetchLevel(384)
+        ]);
+
+        console.log(`[OpenAI] Generated Dual Embeddings: Rich(1536d) | Fast(384d)`);
+
+        return { rich, fast };
     } catch (error) {
-        console.error('[OpenAI] Embedding generation failed:', error);
+        console.error('[OpenAI] Dual embedding generation failed:', error);
         throw error;
     }
 }
