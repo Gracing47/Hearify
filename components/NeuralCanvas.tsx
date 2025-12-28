@@ -12,16 +12,17 @@ import {
     Shader,
     Skia
 } from '@shopify/react-native-skia';
-import React, { useEffect, useMemo, useState } from 'react';
+import * as Haptics from 'expo-haptics';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, Dimensions, StyleSheet, Text, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import {
     Extrapolate,
-    interpolate,
-    useDerivedValue,
+    interpolate, runOnJS, useDerivedValue,
     useFrameCallback,
     useSharedValue
 } from 'react-native-reanimated';
+import { ThoughtActionModal } from './ThoughtActionModal';
 
 import { getAllClusters, getAllEdges, getDb, isDatabaseReady } from '../db';
 import { Snippet } from '../db/schema';
@@ -72,6 +73,10 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
     const [isLoading, setIsLoading] = useState(true);
     const [edgePairs, setEdgePairs] = useState<[number, number][]>([]);
     const [clusters, setClusters] = useState<any[]>([]);
+
+    // 💭 THOUGHT ACTION MODAL STATE
+    const [selectedNode, setSelectedNode] = useState<Snippet | null>(null);
+    const [isModalVisible, setIsModalVisible] = useState(false);
 
     // 1. Focus Engine (EWMA Stabilizer)
     const rawFocusX = useSharedValue(0);
@@ -284,10 +289,94 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
         })
     );
 
+    // 💭 NODE TAP DETECTION: Find which node was tapped
+    const handleNodeTap = useCallback((tapX: number, tapY: number) => {
+        // Transform tap coordinates to world space
+        const worldX = (tapX - SCREEN_WIDTH / 2) / scale.value - translateX.value;
+        const worldY = (tapY - SCREEN_HEIGHT / 2) / scale.value - translateY.value;
+
+        // Find closest node within tap radius (40px world space)
+        const TAP_RADIUS = 50;
+        let closestNode: Snippet | null = null;
+        let closestDist = TAP_RADIUS;
+
+        for (let i = 0; i < nodes.length; i++) {
+            const nx = posX.value[i];
+            const ny = posY.value[i];
+            const dist = Math.sqrt((worldX - nx) ** 2 + (worldY - ny) ** 2);
+
+            if (dist < closestDist) {
+                closestDist = dist;
+                closestNode = nodes[i];
+            }
+        }
+
+        if (closestNode) {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            setSelectedNode(closestNode);
+            setIsModalVisible(true);
+        }
+    }, [nodes, scale, translateX, translateY, posX, posY]);
+
+    // Tap gesture for node selection
+    const tapGesture = Gesture.Tap()
+        .onEnd((e) => {
+            'worklet';
+            runOnJS(handleNodeTap)(e.x, e.y);
+        });
+
+    // Combine all gestures
+    const combinedGesture = Gesture.Exclusive(tapGesture, gesture);
+
     // CTC touch on any gesture (runs on JS thread)
     const handleGestureStart = () => {
         useCTC.getState().touch();
     };
+
+    // 💭 MODAL ACTION HANDLERS
+    const handleCloseModal = useCallback(() => {
+        setIsModalVisible(false);
+        setSelectedNode(null);
+    }, []);
+
+    const handleChronicle = useCallback((snippet: Snippet) => {
+        // Navigate to Chronicles with this snippet highlighted
+        console.log('📖 Chronicle:', snippet.content.substring(0, 50));
+        useContextStore.getState().setActiveScreen('memory');
+        useContextStore.getState().setFocusNode(snippet.id);
+        handleCloseModal();
+    }, [handleCloseModal]);
+
+    const handleReflect = useCallback((snippet: Snippet) => {
+        // Go to Orbit and start conversation about this thought
+        console.log('💭 Reflect:', snippet.content.substring(0, 50));
+        useContextStore.getState().setActiveScreen('orbit');
+        // TODO: Pre-fill chat with reflection prompt
+        handleCloseModal();
+    }, [handleCloseModal]);
+
+    const handleConnect = useCallback((snippet: Snippet) => {
+        // TODO: Enable connection mode - tap another node to link
+        console.log('🔗 Connect:', snippet.content.substring(0, 50));
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        handleCloseModal();
+    }, [handleCloseModal]);
+
+    const handleStar = useCallback(async (snippet: Snippet) => {
+        // Increase importance in database
+        console.log('⭐ Star:', snippet.content.substring(0, 50));
+        try {
+            const db = await getDb();
+            await db.execute(
+                'UPDATE snippets SET importance = importance + 0.5 WHERE id = ?',
+                [snippet.id]
+            );
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        } catch (error) {
+            console.error('Failed to star snippet:', error);
+        }
+        handleCloseModal();
+    }, [handleCloseModal]);
 
     if (isLoading) return (
         <View style={styles.loader}>
@@ -306,7 +395,7 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
 
     return (
         <View style={styles.container}>
-            <GestureDetector gesture={gesture}>
+            <GestureDetector gesture={combinedGesture}>
                 <Canvas style={styles.canvas}>
                     <Shader source={backgroundShader} uniforms={backgroundUniforms} />
 
@@ -326,12 +415,23 @@ export const NeuralCanvas = ({ filterType = 'all', layoutY }: NeuralCanvasProps)
                                 posY={posY}
                                 scale={scale}
                                 time={time}
-                                isActive={node.id === activeFocusNodeId}
+                                isActive={node.id === activeFocusNodeId || node.id === selectedNode?.id}
                             />
                         ))}
                     </Group>
                 </Canvas>
             </GestureDetector>
+
+            {/* 💭 Thought Action Modal */}
+            <ThoughtActionModal
+                visible={isModalVisible}
+                snippet={selectedNode}
+                onClose={handleCloseModal}
+                onChronicle={handleChronicle}
+                onConnect={handleConnect}
+                onReflect={handleReflect}
+                onStar={handleStar}
+            />
         </View>
     );
 };
