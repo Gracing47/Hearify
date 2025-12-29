@@ -1,6 +1,7 @@
 import { findSimilarSnippets, getDb } from '@/db';
 import { useCTC } from '@/store/CognitiveTempoController';
 import { useContextStore } from '@/store/contextStore';
+import { SatelliteEngine } from './SatelliteEngine';
 
 // Birth energy is modulated by CTC state
 
@@ -46,6 +47,8 @@ class SatelliteInsertEngine {
         // Queue background operations
         this.insertQueue.add(() => this.computeSemanticEdges(snippetId, embeddingRich));
         this.insertQueue.add(() => this.updateClusterCentroids(snippetId));
+        // 🧠 CONTENT ENRICHMENT (Flashcards & Strategy)
+        this.insertQueue.add(() => this.enrichNodeContent(snippetId));
 
         // After processing, trigger Horizon refresh with birth energy
         setTimeout(() => {
@@ -130,6 +133,15 @@ class SatelliteInsertEngine {
             'INSERT OR REPLACE INTO cluster_centroids (cluster_id, x, y, z, node_count, avg_importance, last_updated) VALUES (?, ?, ?, ?, ?, ?, ?)',
             [clusterId, sumX / count, sumY / count, sumZ / count, count, sumImp / count, Date.now()]
         );
+    }
+
+    private async enrichNodeContent(nodeId: number) {
+        const db = getDb();
+        const res = await db.execute('SELECT content, type FROM snippets WHERE id = ?', [nodeId]);
+        const row = res.rows?.[0] as any;
+        if (row) {
+            await SatelliteEngine.enrichSnippet(db, nodeId, row.content, row.type);
+        }
     }
 }
 

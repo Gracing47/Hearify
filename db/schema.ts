@@ -21,6 +21,7 @@ export interface Snippet {
   connection_count: number;
   last_accessed: number | null;
   reasoning?: string;
+  utility_data?: string; // JSON String for personas (Flashcards, Strategy, etc.)
 }
 
 /**
@@ -44,7 +45,8 @@ export const SCHEMA = {
       last_accessed INTEGER,
       cluster_id INTEGER,
       cluster_label TEXT,
-      reasoning TEXT
+      reasoning TEXT,
+      utility_data TEXT DEFAULT '{}'
     );
     CREATE INDEX IF NOT EXISTS idx_snippets_type ON snippets(type);
     CREATE INDEX IF NOT EXISTS idx_snippets_cluster ON snippets(cluster_id);
@@ -143,6 +145,19 @@ export const SCHEMA = {
     CREATE INDEX IF NOT EXISTS idx_deltas_date ON daily_deltas(date);
   `,
 
+  // Phase 2, Sprint 3: Trust Engine (Feedback Signals)
+  feedbackSignals: `
+    CREATE TABLE IF NOT EXISTS feedback_signals (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_node_id TEXT, -- Context (e.g. input trigger)
+      target_node_id TEXT, -- Rejected/Accepted Node ID
+      action_type TEXT,    -- 'REJECTED' | 'ACCEPTED'
+      created_at INTEGER DEFAULT (strftime('%s', 'now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_feedback_source ON feedback_signals(source_node_id);
+    CREATE INDEX IF NOT EXISTS idx_feedback_target ON feedback_signals(target_node_id);
+  `,
+
   // Migrations for schema evolution
   migrations: [
     `ALTER TABLE snippets ADD COLUMN z REAL DEFAULT 0;`,
@@ -150,7 +165,7 @@ export const SCHEMA = {
     `ALTER TABLE snippets ADD COLUMN connection_count INTEGER DEFAULT 0;`,
     `ALTER TABLE snippets ADD COLUMN last_accessed INTEGER;`,
     `ALTER TABLE snippets ADD COLUMN cluster_label TEXT;`,
-    `ALTER TABLE snippets ADD COLUMN reasoning TEXT;`
+    `ALTER TABLE snippets ADD COLUMN reasoning TEXT;`,
+    `ALTER TABLE snippets ADD COLUMN utility_data TEXT DEFAULT '{}';`
   ]
 };
-

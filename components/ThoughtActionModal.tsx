@@ -190,9 +190,36 @@ export const ThoughtActionModal = ({
     onChronicle,
     onConnect,
     onReflect,
-    onStar
-}: ThoughtActionModalProps) => {
+    onStar,
+    origin // v2.0: Connected Animation Origin
+}: ThoughtActionModalProps & { origin?: { x: number; y: number } | null }) => {
     const backdropOpacity = useSharedValue(0);
+
+    // Connected Animation Logic (Microsoft Fluent)
+    const EnteringAnimation = React.useMemo(() => {
+        if (!origin) return SlideInDown.springify().damping(20).stiffness(90);
+
+        return () => {
+            'worklet';
+            const initialX = origin.x - SCREEN_WIDTH / 2;
+            const initialY = origin.y - SCREEN_HEIGHT; // Approximate bottom sheet position offset
+
+            return {
+                initialValues: {
+                    transform: [{ translateX: initialX }, { translateY: initialY }, { scale: 0.1 }],
+                    opacity: 0
+                },
+                animations: {
+                    transform: [
+                        { translateX: withSpring(0, { damping: 20, stiffness: 100 }) },
+                        { translateY: withSpring(0, { damping: 20, stiffness: 100 }) },
+                        { scale: withSpring(1, { damping: 20, stiffness: 100 }) }
+                    ],
+                    opacity: withTiming(1, { duration: 200 })
+                }
+            };
+        };
+    }, [origin]);
 
     useEffect(() => {
         if (visible) {
@@ -249,7 +276,7 @@ export const ThoughtActionModal = ({
             {/* Modal Panel */}
             <View style={styles.modalContainer} pointerEvents="box-none">
                 <Animated.View
-                    entering={SlideInDown.springify().damping(20).stiffness(90)}
+                    entering={EnteringAnimation}
                     exiting={SlideOutDown.duration(300)}
                     style={styles.panel}
                 >

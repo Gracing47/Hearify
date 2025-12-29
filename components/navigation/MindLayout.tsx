@@ -65,9 +65,9 @@ const applyRubberBand = (value: number, min: number, max: number, factor: number
 };
 
 export const MindLayout = () => {
-    // Horizontal position: 0 = Orbit (Home), -SCREEN_WIDTH = Horizon
-    const translateX = useSharedValue(0);
-    const startX = useSharedValue(0);
+    // Horizontal position: 0 = Horizon (Left), -SCREEN_WIDTH = Orbit (Right)
+    const translateX = useSharedValue(-SCREEN_WIDTH); // Start at Orbit
+    const startX = useSharedValue(-SCREEN_WIDTH);
 
     const [memoryVisible, setMemoryVisible] = useState(false);
     const activeScreen = useContextStore(state => state.activeScreen);
@@ -77,8 +77,13 @@ export const MindLayout = () => {
         if (activeScreen === 'memory') {
             setMemoryVisible(true);
             return;
+        } else {
+            // Close memory modal if we navigate away to horizon/orbit
+            setMemoryVisible(false);
         }
-        const target = activeScreen === 'horizon' ? -SCREEN_WIDTH : 0;
+
+        // Horizon (Left) -> 0, Orbit (Right) -> -SCREEN_WIDTH
+        const target = activeScreen === 'horizon' ? 0 : -SCREEN_WIDTH;
         if (Math.abs(translateX.value - target) > 1) {
             translateX.value = withSpring(target, SPRING_CONFIG);
         }
@@ -109,7 +114,11 @@ export const MindLayout = () => {
     }, []);
 
     // Horizontal pan gesture
+    // Note: minPointers(1).maxPointers(1) ensures this only activates with single finger,
+    // allowing 2-finger pinch gestures to pass through to child components (NeuralCanvas)
     const panGesture = Gesture.Pan()
+        .minPointers(1)
+        .maxPointers(1)
         .activeOffsetX([-GESTURE_CONFIG.activationThreshold, GESTURE_CONFIG.activationThreshold])
         .failOffsetY([-30, 30]) // Allow vertical scrolling to pass through
         .onStart(() => {
@@ -126,19 +135,22 @@ export const MindLayout = () => {
             'worklet';
             const { velocityX } = event;
             const position = translateX.value;
+            // Clamped between -SCREEN_WIDTH (Orbit) and 0 (Horizon)
             const clampedPosition = Math.max(-SCREEN_WIDTH, Math.min(0, position));
             const predictedTarget = clampedPosition + velocityX * 0.15;
 
             let targetValue: number;
             let targetScreen: 'orbit' | 'horizon';
 
-            // Swipe LEFT = go to Horizon, Swipe RIGHT = go to Orbit
+            // Threshold at -SCREEN_WIDTH * 0.5
+            // If < -0.5*W (Right side) -> Orbit
+            // If > -0.5*W (Left side) -> Horizon
             if (predictedTarget < -SCREEN_WIDTH * 0.5) {
                 targetValue = -SCREEN_WIDTH;
-                targetScreen = 'horizon';
+                targetScreen = 'orbit';
             } else {
                 targetValue = 0;
-                targetScreen = 'orbit';
+                targetScreen = 'horizon';
             }
 
             translateX.value = withSpring(targetValue, {
@@ -158,25 +170,9 @@ export const MindLayout = () => {
         transform: [{ translateX: translateX.value }],
     }));
 
-    // Orbit fades as we swipe left
+    // Orbit (Right Screen)
+    // Visible at -SCREEN_WIDTH, fades/scales as x -> 0
     const orbitStyle = useAnimatedStyle(() => {
-        const opacity = interpolate(
-            translateX.value,
-            [-SCREEN_WIDTH * 0.5, 0],
-            [0.3, 1],
-            Extrapolate.CLAMP
-        );
-        const scale = interpolate(
-            translateX.value,
-            [-SCREEN_WIDTH, 0],
-            [0.92, 1],
-            Extrapolate.CLAMP
-        );
-        return { opacity, transform: [{ scale }] };
-    });
-
-    // Horizon fades in as we swipe left
-    const horizonStyle = useAnimatedStyle(() => {
         const opacity = interpolate(
             translateX.value,
             [-SCREEN_WIDTH, -SCREEN_WIDTH * 0.5],
@@ -192,20 +188,38 @@ export const MindLayout = () => {
         return { opacity, transform: [{ scale }] };
     });
 
+    // Horizon (Left Screen)
+    // Visible at 0, fades/scales as x -> -SCREEN_WIDTH
+    const horizonStyle = useAnimatedStyle(() => {
+        const opacity = interpolate(
+            translateX.value,
+            [-SCREEN_WIDTH * 0.5, 0],
+            [0.3, 1],
+            Extrapolate.CLAMP
+        );
+        const scale = interpolate(
+            translateX.value,
+            [-SCREEN_WIDTH, 0],
+            [0.92, 1],
+            Extrapolate.CLAMP
+        );
+        return { opacity, transform: [{ scale }] };
+    });
+
     return (
         <View style={styles.viewport}>
             <ToastContainer />
 
             <GestureDetector gesture={panGesture}>
                 <Animated.View style={[styles.stack, containerStyle]}>
-                    {/* Orbit (Home) - Left */}
-                    <Animated.View style={[styles.screen, styles.orbit, orbitStyle]}>
-                        <OrbitScreen layoutY={translateX} onOpenChronicle={openMemory} />
-                    </Animated.View>
-
-                    {/* Horizon (Canvas) - Right */}
+                    {/* Horizon (Canvas) - Left */}
                     <Animated.View style={[styles.screen, styles.horizon, horizonStyle]}>
                         <HorizonScreen layoutY={translateX} />
+                    </Animated.View>
+
+                    {/* Orbit (Home) - Right */}
+                    <Animated.View style={[styles.screen, styles.orbit, orbitStyle]}>
+                        <OrbitScreen layoutY={translateX} onOpenChronicle={openMemory} />
                     </Animated.View>
                 </Animated.View>
             </GestureDetector>

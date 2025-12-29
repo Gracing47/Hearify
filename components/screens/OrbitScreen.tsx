@@ -3,11 +3,12 @@
  */
 
 import { DeltaCard } from '@/components/DeltaCard';
+import { GhostSuggestionsContainer } from '@/components/GhostSuggestion';
 import { NeuralOrb } from '@/components/NeuralOrb';
 import { NeuralThinking } from '@/components/NeuralThinking';
 import { BurgerMenuButton, SideMenu } from '@/components/SideMenu';
 import { areKeysConfigured } from '@/config/api';
-import { findSimilarSnippets } from '@/db';
+import { createEdge, findSimilarSnippets } from '@/db';
 import { useTTS } from '@/hooks/useTTS';
 import { useVoiceCapture } from '@/hooks/useVoiceCapture';
 import { processWithReasoning } from '@/services/deepseek';
@@ -17,14 +18,17 @@ import { generateEmbedding } from '@/services/openai';
 import { saveSnippetWithDedup } from '@/services/SemanticDedupService';
 import { useContextStore } from '@/store/contextStore';
 import { useConversationStore } from '@/store/conversation';
+import { LinearGradient } from 'expo-linear-gradient'; // Added import
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
     Dimensions,
+    Keyboard,
     Pressable,
     StyleSheet,
     Text,
+    TextInput,
     TouchableOpacity,
     View
 } from 'react-native';
@@ -48,6 +52,12 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { processWithGPT } from '@/services/openai-chat';
 import * as Haptics from '@/utils/haptics';
 
+// 🧠 Sprint 1.1: ACE Integration
+import { useEcoMode } from '@/hooks/useEcoMode';
+import { usePredictions } from '@/hooks/usePredictions';
+import { ace } from '@/services/AmbientConnectionEngine';
+import { usePredictionStore, type Prediction } from '@/store/predictionStore';
+
 type AppState = 'idle' | 'listening' | 'processing' | 'speaking';
 
 interface OrbitScreenProps {
@@ -56,6 +66,7 @@ interface OrbitScreenProps {
 }
 
 const AnimatedScrollView = Animated.createAnimatedComponent(ScrollView);
+const AnimatedLinearGradient = Animated.createAnimatedComponent(LinearGradient);
 
 /**
  * 🎨 Memoized Message Bubble - Performance Core
@@ -96,6 +107,20 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     const [deltaShown, setDeltaShown] = useState(true);
     const [deepThinking, setDeepThinking] = useState(false);
 
+    // 🆕 Sprint 1.1: Text Input & ACE State
+    const [textInput, setTextInput] = useState('');
+    const [stagedConnections, setStagedConnections] = useState<Prediction[]>([]);
+    const textInputRef = React.useRef<TextInput>(null);
+
+    // 🧠 ACE Predictions
+    const predictions = usePredictions();
+    const ecoMode = useEcoMode();
+
+    // Set ACE tier based on eco mode
+    useEffect(() => {
+        ace.setTier(ecoMode.isEcoMode ? 'ECO' : 'STANDARD');
+    }, [ecoMode.isEcoMode]);
+
     const voiceCapture = useVoiceCapture();
     const tts = useTTS();
 
@@ -112,6 +137,10 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     const isReasoning = useConversationStore(state => state.isReasoning);
     const isEmbedding = useConversationStore(state => state.isEmbedding);
     const isSpeaking = useConversationStore(state => state.isSpeaking);
+
+    // 👻 Ghost Mode (Sprint 2.1)
+    const isGhostMode = useContextStore(state => state.isGhostMode);
+    const setGhostMode = useContextStore(state => state.setGhostMode);
 
     const recordButtonScale = useSharedValue(1);
 
@@ -134,6 +163,19 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
         transform: [{ scale: recordButtonScale.value }],
     }));
 
+    // 🔦 SEMANTIC AWARENESS (Edge Glow)
+    const ambientPredictions = useContextStore(state => state.ambientPredictions);
+
+    const edgeGlowStyle = useAnimatedStyle(() => {
+        // Active when reasoning, embedding, OR when ACE found connections (Sprint 1.3)
+        const hasPredictions = ambientPredictions.length > 0;
+        const active = isEmbedding || isReasoning || hasPredictions;
+
+        return {
+            opacity: withTiming(active ? 0.6 : 0, { duration: 600 })
+        };
+    });
+
     // Scroll ref for auto-scroll
     const scrollRef = React.useRef<ScrollView>(null);
     const prevMessageCount = React.useRef(0);
@@ -152,21 +194,22 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     const insets = useSafeAreaInsets();
     const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-    // 🚀 SINGULARITY: The Orb reacts to horizontal swipe towards Horizon
+    // 🚀 SINGULARITY: The Orb reacts to horizontal swipe
+    // Triptych: -2W = Chronicle, -W = Orbit (Home), 0 = Horizon
     const heroOrbStyle = useAnimatedStyle(() => {
         if (!layoutY) return {};
 
         const scale = interpolate(
             Number(layoutY.value),
-            [-SCREEN_WIDTH, 0],
-            [12, 1],
+            [-SCREEN_WIDTH * 2, -SCREEN_WIDTH, 0],
+            [0.8, 1, 8],
             Extrapolate.CLAMP
         );
 
         const opacity = interpolate(
             Number(layoutY.value),
-            [-SCREEN_WIDTH, -SCREEN_WIDTH * 0.4, 0],
-            [0, 0.6, 1],
+            [-SCREEN_WIDTH * 1.5, -SCREEN_WIDTH, -SCREEN_WIDTH * 0.5],
+            [0.4, 1, 0.4],
             Extrapolate.CLAMP
         );
 
@@ -211,6 +254,232 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
         fetchDelta();
     }, []);
 
+    // =========================================================================
+    // 🧠 Sprint 1.1: Text Input & ACE Handlers
+    // =========================================================================
+
+    // Handle text input change - triggers ACE search
+    const handleTextChange = useCallback((text: string) => {
+        setTextInput(text);
+
+        // 🧠 Sprint 3: Carry context to Horizon
+        // Extract meaningful keywords for illumination
+        const terms = text.toLowerCase()
+            .split(/[\s,.;:!?]+/)
+            .filter(w => w.length > 3);
+
+        useContextStore.getState().transitionTo('orbit', { highlightTerms: terms });
+
+        // Clear staged connections if input is cleared
+        if (text.trim().length === 0) {
+            setStagedConnections([]);
+            // Since we're using a real ACE implementation elsewhere, 
+            // the clear call might differ, but let's keep it consistent
+            return;
+        }
+
+        // Trigger ACE search (debounced)
+        // Note: 'ace' is usually a globally injected/imported service or hook result
+        // @ts-ignore - ace is part of the Sprint 1.1 architecture
+        if (typeof ace !== 'undefined') {
+            ace.debouncedFind(text, (predictions: Prediction[]) => {
+                if (__DEV__ && predictions.length > 0) {
+                    console.log('[Orbit] 🎯 ACE found', predictions.length, 'predictions');
+                }
+            });
+        }
+    }, []);
+
+    // Handle accepting a ghost suggestion (staging for edge creation)
+    const handleAcceptPrediction = useCallback((prediction: Prediction) => {
+        // Add to staged connections
+        setStagedConnections(prev => {
+            // Prevent duplicates
+            if (prev.some(p => p.nodeId === prediction.nodeId)) return prev;
+            return [...prev, prediction];
+        });
+
+        Haptics.impactHeavy();
+
+        if (__DEV__) {
+            console.log('[Orbit] 📎 Staged connection:', prediction.node.content.substring(0, 30));
+        }
+    }, []);
+
+    // Handle removing a staged connection
+    const handleRemoveStagedConnection = useCallback((nodeId: number) => {
+        setStagedConnections(prev => prev.filter(p => p.nodeId !== nodeId));
+        Haptics.selection();
+    }, []);
+
+    // Process text message (shared logic for text and voice)
+    const processTextMessage = useCallback(async (
+        userText: string,
+        stagedEdges: Prediction[] = []
+    ) => {
+        try {
+            Haptics.thinking();
+            setAppState('processing');
+
+            addUserMessage(userText);
+
+            setEmbedding(true);
+            const [{ rich: queryEmbed }] = await Promise.all([
+                generateEmbedding(userText),
+            ]);
+
+            useContextStore.getState().setFocusVector(queryEmbed);
+
+            const similarSnippets = await findSimilarSnippets(queryEmbed, 5);
+
+            const context = similarSnippets.map(s => {
+                const timeAgo = Math.floor((Date.now() - s.timestamp) / (1000 * 60 * 60 * 24));
+                const temporalHeader = timeAgo === 0 ? "Heute" : timeAgo === 1 ? "Gestern" : `${timeAgo} Tage her`;
+                return `[${s.type.toUpperCase()} | ${s.topic} | ${temporalHeader}]: ${s.content}`;
+            });
+            setEmbedding(false);
+
+            let finalResponse = '';
+            let finalReasoning = '';
+            let snippets: any[] = [];
+
+            const history = messages.map(m => ({
+                role: m.role as 'user' | 'assistant',
+                content: m.content
+            }));
+
+            if (deepThinking) {
+                setReasoning(true);
+                const result = await processWithReasoning(userText, context, history);
+                finalResponse = result.response;
+                finalReasoning = result.reasoning;
+                snippets = result.snippets;
+            } else {
+                setReasoning(true);
+                const result = await processWithGPT(userText, context, history);
+                finalResponse = result.response;
+                snippets = result.snippets;
+            }
+
+            addAIResponse(finalResponse, finalReasoning);
+            setReasoning(false);
+
+            // Save snippets with staged edges
+            setEmbedding(true);
+
+            // 👻 Ghost Mode Check
+            const ghostModeActive = useContextStore.getState().isGhostMode;
+            if (ghostModeActive) {
+                if (__DEV__) console.log('[Orbit] 👻 Ghost Mode Active: Skipping memory save.');
+                // We still want edges for the session, but maybe not persistent? 
+                // For now, full privacy = no DB writes.
+            } else if (snippets.length > 0) {
+                await Promise.all(snippets.map(async snippet => {
+                    const result = await saveSnippetWithDedup({
+                        content: snippet.content,
+                        type: snippet.type,
+                        sentiment: snippet.sentiment,
+                        topic: snippet.topic,
+                        reasoning: finalReasoning,
+                    });
+
+                    // ⚡ Create edges for staged connections (Sprint 1.3)
+                    if (stagedEdges.length > 0 && result.snippetId) {
+                        if (__DEV__) {
+                            console.log('[Orbit] 🔗 Creating edges to:',
+                                stagedEdges.map(p => p.nodeId).join(', '));
+                        }
+
+                        // Persistent Edge Creation
+                        await Promise.all(stagedEdges.map(async edge => {
+                            await createEdge(result.snippetId!, edge.nodeId, edge.confidence);
+
+                            // 🎞️ Trigger "Synaptic Fire" Animation in Horizon
+                            useContextStore.getState().triggerSynapticFire(result.snippetId!, edge.nodeId);
+                        }));
+
+                        // Trigger global refresh to show new lines
+                        useContextStore.getState().triggerNodeRefresh();
+                    }
+                }));
+            }
+            setEmbedding(false);
+
+            setAppState('speaking');
+            setSpeaking(true);
+            try {
+                await tts.speak(finalResponse, () => {
+                    Haptics.speaking();
+                });
+            } catch (ttsError) {
+                console.error('[Neural Loop] TTS failed:', ttsError);
+            }
+
+            setSpeaking(false);
+            setAppState('idle');
+
+        } catch (error) {
+            console.error('[Neural Loop] Failed:', error);
+            setError(error instanceof Error ? error.message : 'Unknown error');
+            setTranscribing(false);
+            setReasoning(false);
+            setEmbedding(false);
+            setSpeaking(false);
+            setAppState('idle');
+            Haptics.error();
+            Alert.alert('Error', 'Neural loop failed.');
+        }
+    }, [deepThinking, messages, tts, addAIResponse, addUserMessage, setTranscribing, setEmbedding, setReasoning, setSpeaking, setError]);
+
+    // Handle sending text message (similar to voice flow)
+    const handleSendText = useCallback(async () => {
+        if (!textInput.trim() || appState !== 'idle') return;
+        if (!isKeysConfigured) {
+            Alert.alert('Setup Required', 'Please configure your API keys in settings');
+            return;
+        }
+
+        const userText = textInput.trim();
+        const currentStagedConnections = [...stagedConnections];
+
+        // Clear input state
+        setTextInput('');
+        setStagedConnections([]);
+        usePredictionStore.getState().clearPredictions();
+        Keyboard.dismiss();
+
+        // Process the text (similar to processAudio but without transcription)
+        await processTextMessage(userText, currentStagedConnections);
+    }, [textInput, stagedConnections, appState, isKeysConfigured, processTextMessage]);
+
+
+
+    const processAudio = useCallback(async (audioUri: string) => {
+        try {
+            Haptics.thinking();
+
+            setTranscribing(true);
+            const { text: transcript } = await transcribeAudio(audioUri);
+            setTranscribing(false);
+
+            // Capture staged connections before clearing
+            const currentStagedConnections = [...stagedConnections];
+            setStagedConnections([]);
+            usePredictionStore.getState().clearPredictions();
+
+            // Process the transcript using unified logic
+            await processTextMessage(transcript, currentStagedConnections);
+
+        } catch (error) {
+            console.error('[Neural Loop] Failed:', error);
+            setError(error instanceof Error ? error.message : 'Unknown error');
+            setTranscribing(false);
+            setAppState('idle');
+            Haptics.error();
+            Alert.alert('Error', 'Neural loop failed.');
+        }
+    }, [stagedConnections, processTextMessage, setTranscribing, setAppState, setError]);
+
     const handleRecordPress = useCallback(async () => {
         if (!isKeysConfigured) {
             Alert.alert('Setup Required', 'Please configure your API keys in settings');
@@ -241,97 +510,8 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
             setAppState('idle');
             Haptics.listening();
         }
-    }, [appState, voiceCapture, isKeysConfigured, tts]);
+    }, [appState, voiceCapture, isKeysConfigured, tts, processAudio]);
 
-    const processAudio = useCallback(async (audioUri: string) => {
-        try {
-            Haptics.thinking();
-
-            setTranscribing(true);
-            const { text: transcript } = await transcribeAudio(audioUri);
-            setTranscribing(false);
-            addUserMessage(transcript);
-
-            setEmbedding(true);
-            const [{ rich: queryEmbed }] = await Promise.all([
-                generateEmbedding(transcript),
-            ]);
-
-            useContextStore.getState().setFocusVector(queryEmbed);
-
-            const similarSnippets = await findSimilarSnippets(queryEmbed, 5);
-
-            const context = similarSnippets.map(s => {
-                const timeAgo = Math.floor((Date.now() - s.timestamp) / (1000 * 60 * 60 * 24));
-                const temporalHeader = timeAgo === 0 ? "Heute" : timeAgo === 1 ? "Gestern" : `${timeAgo} Tage her`;
-                return `[${s.type.toUpperCase()} | ${s.topic} | ${temporalHeader}]: ${s.content}`;
-            });
-            setEmbedding(false);
-
-            let finalResponse = '';
-            let finalReasoning = '';
-            let snippets: any[] = [];
-
-            const history = messages.map(m => ({
-                role: m.role as 'user' | 'assistant',
-                content: m.content
-            }));
-
-            if (deepThinking) {
-                setReasoning(true);
-                const result = await processWithReasoning(transcript, context, history);
-                finalResponse = result.response;
-                finalReasoning = result.reasoning;
-                snippets = result.snippets;
-            } else {
-                setReasoning(true);
-                const result = await processWithGPT(transcript, context, history);
-                finalResponse = result.response;
-                snippets = result.snippets;
-            }
-
-            addAIResponse(finalResponse, finalReasoning);
-            setReasoning(false);
-
-            setEmbedding(true);
-            if (snippets.length > 0) {
-                await Promise.all(snippets.map(snippet =>
-                    saveSnippetWithDedup({
-                        content: snippet.content,
-                        type: snippet.type,
-                        sentiment: snippet.sentiment,
-                        topic: snippet.topic,
-                        reasoning: finalReasoning,
-                    })
-                ));
-            }
-            setEmbedding(false);
-
-            setAppState('speaking');
-            setSpeaking(true);
-            try {
-                await tts.speak(finalResponse, () => {
-                    Haptics.speaking();
-                });
-            } catch (ttsError) {
-                console.error('[Neural Loop] TTS failed:', ttsError);
-            }
-
-            setSpeaking(false);
-            setAppState('idle');
-
-        } catch (error) {
-            console.error('[Neural Loop] Failed:', error);
-            setError(error instanceof Error ? error.message : 'Unknown error');
-            setTranscribing(false);
-            setReasoning(false);
-            setEmbedding(false);
-            setSpeaking(false);
-            setAppState('idle');
-            Haptics.error();
-            Alert.alert('Error', 'Neural loop failed.');
-        }
-    }, [deepThinking, messages, voiceCapture, tts, addAIResponse, addUserMessage, setTranscribing, setEmbedding, setReasoning, setSpeaking, setError]);
 
     const orbState = useMemo(() => {
         if (appState === 'listening') return 'listening';
@@ -342,16 +522,39 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
 
     return (
         <View style={styles.container}>
+            {/* 🔦 Semantic Edge Glow */}
+            <AnimatedLinearGradient
+                colors={['#c084fc', 'transparent']}
+                start={{ x: 0, y: 0.5 }}
+                end={{ x: 1, y: 0.5 }}
+                style={[styles.leftEdgeGlow, edgeGlowStyle]}
+                pointerEvents="none"
+            />
             <View style={[styles.safeArea, { paddingTop: insets.top }]}>
                 <SideMenu isOpen={menuOpen} onClose={() => setMenuOpen(false)} />
 
                 <View style={styles.header}>
                     <BurgerMenuButton onPress={() => setMenuOpen(true)} />
                     <Text style={styles.headerTitle}>Orbit</Text>
-                    <Pressable style={styles.chronicleButton} onPress={onOpenChronicle}>
+                    <Pressable style={styles.chronicleButton} onPress={() => {
+                        // In Triptych mode, swipe hint - actual swipe handled by PanoramaScreen
+                        Haptics.light();
+                        useContextStore.getState().setActiveScreen('memory');
+                    }}>
                         <Text style={styles.chronicleIcon}>📜</Text>
-                        <Text style={styles.chronicleText}>Chronicle</Text>
+                        <Text style={styles.chronicleText}>Chronicle →</Text>
                     </Pressable>
+
+                    {/* 👻 Ghost Mode Toggle */}
+                    <TouchableOpacity
+                        style={[styles.ghostToggle, isGhostMode && styles.ghostToggleActive]}
+                        onPress={() => {
+                            Haptics.selection();
+                            setGhostMode(!isGhostMode);
+                        }}
+                    >
+                        <Text style={styles.ghostIcon}>{isGhostMode ? '👻' : '👁️'}</Text>
+                    </TouchableOpacity>
                 </View>
 
                 {messages.length === 0 ? (
@@ -399,6 +602,34 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                     </AnimatedScrollView>
                 )}
 
+                {/* 🧠 Sprint 1.1: Ghost Suggestions (ACE) */}
+                <View style={styles.suggestionsWrapper}>
+                    <GhostSuggestionsContainer onConnectionCreated={handleAcceptPrediction} />
+                </View>
+
+                {/* Staged Connections (Bubbles) */}
+                {stagedConnections.length > 0 && (
+                    <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.stagedList}
+                    >
+                        {stagedConnections.map(conn => (
+                            <TouchableOpacity
+                                key={conn.nodeId}
+                                style={styles.stagedChip}
+                                onPress={() => handleRemoveStagedConnection(conn.nodeId)}
+                            >
+                                <Text style={styles.stagedEmoji}>📎</Text>
+                                <Text style={styles.stagedText} numberOfLines={1}>
+                                    {conn.node.content.substring(0, 15)}...
+                                </Text>
+                                <Text style={styles.stagedClose}>✕</Text>
+                            </TouchableOpacity>
+                        ))}
+                    </ScrollView>
+                )}
+
                 <Animated.View
                     entering={FadeInUp.delay(300).springify()}
                     style={[styles.inputBar, { bottom: insets.bottom + 20 }]}
@@ -414,37 +645,56 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                     </TouchableOpacity>
 
                     <View style={styles.inputField}>
-                        <Text style={styles.inputPlaceholder}>
-                            {appState === 'listening' ? '🔴 Listening...' :
-                                isTranscribing ? '✍️ Transcribing...' :
-                                    isEmbedding ? '🧠 Scanning Matrix...' :
-                                        isReasoning ? (deepThinking ? '💭 Deep thinking...' : '⚡ Thinking...') :
-                                            isSpeaking ? '🔊 Speaking...' :
-                                                deepThinking ? 'Deep thinking enabled...' : 'Share your consciousness...'}
-                        </Text>
+                        <TextInput
+                            ref={textInputRef as any}
+                            style={[styles.textInput, { maxHeight: 100 }] as any}
+                            value={textInput}
+                            onChangeText={handleTextChange}
+                            placeholder={
+                                appState === 'listening' ? '🔴 Listening...' :
+                                    isTranscribing ? '✍️ Transcribing...' :
+                                        isEmbedding ? '🧠 Scanning Matrix...' :
+                                            isReasoning ? (deepThinking ? '💭 Deep thinking...' : '⚡ Thinking...') :
+                                                isSpeaking ? '🔊 Speaking...' :
+                                                    deepThinking ? 'Deep thinking enabled...' : 'Share your consciousness...'
+                            }
+                            placeholderTextColor="rgba(255, 255, 255, 0.4)"
+                            multiline
+                            editable={appState === 'idle'}
+                        />
                     </View>
 
-                    <TouchableOpacity
-                        style={[
-                            styles.micButton,
-                            appState === 'listening' && styles.micButtonActive,
-                            (appState === 'processing' || appState === 'speaking') && styles.micButtonDisabled
-                        ]}
-                        onPress={handleRecordPress}
-                        disabled={appState === 'processing' || appState === 'speaking'}
-                    >
-                        <Animated.View style={animatedButtonStyle}>
-                            {appState === 'listening' ? (
-                                <View style={styles.stopIcon} />
-                            ) : appState === 'processing' || appState === 'speaking' ? (
-                                <ActivityIndicator color="#fff" size="small" />
-                            ) : (
-                                <View style={styles.micCircle}>
-                                    <Text style={styles.micEmoji}>🎤</Text>
-                                </View>
-                            )}
-                        </Animated.View>
-                    </TouchableOpacity>
+                    {textInput.length > 0 ? (
+                        <TouchableOpacity
+                            style={styles.sendButton}
+                            onPress={handleSendText}
+                            disabled={appState !== 'idle'}
+                        >
+                            <Text style={styles.sendIcon}>🚀</Text>
+                        </TouchableOpacity>
+                    ) : (
+                        <TouchableOpacity
+                            style={[
+                                styles.micButton,
+                                appState === 'listening' && styles.micButtonActive,
+                                (appState === 'processing' || appState === 'speaking') && styles.micButtonDisabled
+                            ]}
+                            onPress={handleRecordPress}
+                            disabled={appState === 'processing' || appState === 'speaking'}
+                        >
+                            <Animated.View style={animatedButtonStyle}>
+                                {appState === 'listening' ? (
+                                    <View style={styles.stopIcon} />
+                                ) : appState === 'processing' || appState === 'speaking' ? (
+                                    <ActivityIndicator color="#fff" size="small" />
+                                ) : (
+                                    <View style={styles.micCircle}>
+                                        <Text style={styles.micEmoji}>🎤</Text>
+                                    </View>
+                                )}
+                            </Animated.View>
+                        </TouchableOpacity>
+                    )}
                 </Animated.View>
             </View>
         </View>
@@ -454,7 +704,7 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
 const styles = StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#000000',
+        backgroundColor: 'transparent', // Transparent for parallax
     },
     safeArea: {
         flex: 1,
@@ -492,6 +742,24 @@ const styles = StyleSheet.create({
         fontWeight: '700',
         color: '#fff',
         letterSpacing: -0.3,
+    },
+    ghostToggle: {
+        width: 36,
+        height: 36,
+        borderRadius: 18,
+        backgroundColor: 'rgba(255, 255, 255, 0.05)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginLeft: 8,
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+    },
+    ghostToggleActive: {
+        backgroundColor: 'rgba(139, 92, 246, 0.2)',
+        borderColor: '#8b5cf6',
+    },
+    ghostIcon: {
+        fontSize: 16,
     },
     welcomeContainer: {
         flex: 1,
@@ -603,9 +871,9 @@ const styles = StyleSheet.create({
     },
     inputField: {
         flex: 1,
-        height: 48,
+        minHeight: 48,
         justifyContent: 'center',
-        paddingHorizontal: 16,
+        paddingHorizontal: 8,
     },
     inputPlaceholder: {
         fontSize: 15,
@@ -669,6 +937,80 @@ const styles = StyleSheet.create({
         shadowRadius: 8,
     },
     thinkingToggleText: {
+        fontSize: 18,
+    },
+    leftEdgeGlow: {
+        position: 'absolute',
+        left: 0,
+        top: 0,
+        bottom: 0,
+        width: 100,
+        zIndex: 50,
+    },
+    // 🧠 Sprint 1.1: ACE Integrated Styles
+    suggestionsWrapper: {
+        position: 'absolute',
+        bottom: 160, // Above staged chips and input bar
+        left: 0,
+        right: 0,
+        zIndex: 100,
+    },
+    stagedList: {
+        position: 'absolute',
+        bottom: 100, // Just above the input bar
+        left: 0,
+        paddingHorizontal: 20,
+        paddingBottom: 12,
+        zIndex: 90,
+    },
+    stagedChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: 'rgba(99, 102, 241, 0.2)',
+        borderColor: 'rgba(99, 102, 241, 0.4)',
+        borderWidth: 1,
+        borderRadius: 12,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        marginRight: 8,
+        gap: 6,
+    },
+    stagedEmoji: {
+        fontSize: 12,
+    },
+    stagedText: {
+        fontSize: 12,
+        color: '#818cf8',
+        fontWeight: '600',
+        maxWidth: 120,
+    },
+    stagedClose: {
+        fontSize: 12,
+        color: '#818cf8',
+        marginLeft: 2,
+        opacity: 0.6,
+    },
+    textInput: {
+        fontSize: 16,
+        color: '#fff',
+        fontWeight: '500',
+        paddingTop: 8,
+        paddingBottom: 8,
+    },
+    sendButton: {
+        width: 48,
+        height: 48,
+        borderRadius: 24,
+        backgroundColor: '#6366f1',
+        justifyContent: 'center',
+        alignItems: 'center',
+        shadowColor: '#6366f1',
+        shadowOffset: { width: 0, height: 6 },
+        shadowOpacity: 0.5,
+        shadowRadius: 10,
+        elevation: 8,
+    },
+    sendIcon: {
         fontSize: 18,
     },
 });

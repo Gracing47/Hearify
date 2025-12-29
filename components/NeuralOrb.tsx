@@ -3,9 +3,9 @@
  * High-fidelity SKSL Shader with refraction and organic distortion.
  */
 
-import { Canvas, Circle, Fill, Group, Shader, Skia } from '@shopify/react-native-skia';
+import { Canvas, Circle, Fill, Shader, Skia } from '@shopify/react-native-skia';
 import React from 'react';
-import { SharedValue, useDerivedValue, useFrameCallback, useSharedValue, withSpring } from 'react-native-reanimated';
+import { SharedValue, useAnimatedReaction, useDerivedValue, useFrameCallback, useSharedValue, withSpring } from 'react-native-reanimated';
 
 const DEFAULT_ORB_SIZE = 280; // Default size when not specified
 
@@ -79,10 +79,14 @@ export function NeuralOrb({ intensity, state, size = DEFAULT_ORB_SIZE }: NeuralO
         }
     });
 
-    const springIntensity = useDerivedValue(() => {
-        const base = intensity.value + thinkingPulse.value;
-        return withSpring(base, { damping: 12, stiffness: 90 });
-    });
+    const springIntensity = useSharedValue(0);
+
+    useAnimatedReaction(
+        () => intensity.value + thinkingPulse.value,
+        (val) => {
+            springIntensity.value = withSpring(val, { damping: 12, stiffness: 90 });
+        }
+    );
 
     const orbColor = useDerivedValue(() => {
         switch (state) {
@@ -104,13 +108,12 @@ export function NeuralOrb({ intensity, state, size = DEFAULT_ORB_SIZE }: NeuralO
     return (
         <Canvas style={{ width: size, height: size }}>
             <Fill color="transparent" />
-            <Group>
+            <Circle cx={size / 2} cy={size / 2} r={size / 2}>
                 <Shader
                     source={neuralOrbShader}
                     uniforms={uniforms}
                 />
-                <Circle cx={size / 2} cy={size / 2} r={size / 2} />
-            </Group>
+            </Circle>
         </Canvas>
     );
 }

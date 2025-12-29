@@ -56,3 +56,11 @@ export function selection(): void {
 export function light(): void {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
 }
+
+/**
+ * Heavy haptic for important actions (e.g., accepting a connection)
+ */
+export function impactHeavy(): void {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+}
+

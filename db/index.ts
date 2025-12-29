@@ -67,7 +67,8 @@ async function initDatabaseInternal(targetDbName: string): Promise<DB> {
             SCHEMA.clusterCentroids,
             SCHEMA.externalResources,
             SCHEMA.resourceLinks,
-            SCHEMA.dailyDeltas
+            SCHEMA.dailyDeltas,
+            SCHEMA.feedbackSignals
         ];
 
         for (const sqlBlock of statements) {
@@ -239,6 +240,32 @@ export async function findSimilarSnippets(
 }
 
 /**
+ * Find snippets by keyword match (fast local search)
+ * This is the "Intent-First" move for ACE.
+ */
+export async function findKeywordMatches(keyword: string, limit: number = 3): Promise<Snippet[]> {
+    try {
+        const database = getDb();
+        // Clear whitespace and check length
+        const trimmed = keyword.trim();
+        if (trimmed.length < 2) return [];
+
+        const query = `
+            SELECT * FROM snippets 
+            WHERE content LIKE ? 
+            ORDER BY timestamp DESC 
+            LIMIT ?
+        `;
+        // Match anywhere in content
+        const results = await database.execute(query, [`%${trimmed}%`, limit]);
+        return (results.rows as unknown as Snippet[]) || [];
+    } catch (error) {
+        console.warn('[DB] findKeywordMatches failed:', error);
+        return [];
+    }
+}
+
+/**
  * Get all snippets
  */
 export async function getAllSnippets(): Promise<Snippet[]> {
@@ -278,6 +305,22 @@ export async function getAllSnippetsWithEmbeddings(): Promise<Snippet[]> {
     } catch (error) {
         console.warn('[DB] getAllSnippetsWithEmbeddings failed:', error);
         return [];
+    }
+}
+
+/**
+ * Create a semantic edge between two snippets
+ */
+export async function createEdge(sourceId: number, targetId: number, weight: number = 0.8): Promise<void> {
+    try {
+        const database = getDb();
+        const now = Date.now();
+        await database.execute(
+            'INSERT OR REPLACE INTO semantic_edges (source_id, target_id, weight, created_at) VALUES (?, ?, ?, ?)',
+            [sourceId, targetId, weight, now]
+        );
+    } catch (error) {
+        console.warn('[DB] createEdge failed:', error);
     }
 }
 
