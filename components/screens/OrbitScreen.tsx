@@ -8,7 +8,7 @@ import { NeuralOrb } from '@/components/NeuralOrb';
 import { NeuralThinking } from '@/components/NeuralThinking';
 import { BurgerMenuButton, SideMenu } from '@/components/SideMenu';
 import { areKeysConfigured } from '@/config/api';
-import { createEdge, findSimilarSnippets } from '@/db';
+import { findSimilarSnippets } from '@/db';
 import { useTTS } from '@/hooks/useTTS';
 import { useVoiceCapture } from '@/hooks/useVoiceCapture';
 import { processWithReasoning } from '@/services/deepseek';
@@ -19,7 +19,8 @@ import { saveSnippetWithDedup } from '@/services/SemanticDedupService';
 import { useContextStore } from '@/store/contextStore';
 import { useConversationStore } from '@/store/conversation';
 import { LinearGradient } from 'expo-linear-gradient'; // Added import
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocalSearchParams } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -99,6 +100,60 @@ const MessageBubble = React.memo(({ msg, isAI }: { msg: any, isAI: boolean }) =>
     );
 });
 
+const ReflectionSuggester = ({ reflections, onSave, onDismiss }: {
+    reflections: any[],
+    onSave: (r: any, i: number) => void,
+    onDismiss: (i: number) => void
+}) => {
+    if (reflections.length === 0) return null;
+
+    return (
+        <Animated.View
+            entering={FadeInUp.springify()}
+            style={styles.reflectionContainer}
+        >
+            <View style={styles.reflectionHeader}>
+                <Text style={styles.reflectionTitle}>Möchtest du das festhalten?</Text>
+                <TouchableOpacity onPress={() => reflections.forEach((_, i) => onDismiss(i))}>
+                    <Text style={styles.reflectionDismiss}>Alle ignorieren</Text>
+                </TouchableOpacity>
+            </View>
+            <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.reflectionList}
+            >
+                {reflections.map((ref, i) => (
+                    <Animated.View
+                        key={`${ref.content}-${i}`}
+                        entering={FadeInUp.delay(i * 100).springify()}
+                        layout={LinearTransition}
+                    >
+                        <TouchableOpacity
+                            style={[
+                                styles.reflectionCard,
+                                ref.type === 'goal' && styles.reflectionGoal,
+                                ref.type === 'feeling' && styles.reflectionFeeling,
+                                ref.type === 'fact' && styles.reflectionFact
+                            ]}
+                            onPress={() => onSave(ref, i)}
+                        >
+                            <View style={styles.reflectionIconRow}>
+                                <Text style={styles.reflectionType}>{ref.type.toUpperCase()}</Text>
+                                <TouchableOpacity onPress={() => onDismiss(i)}>
+                                    <Text style={styles.reflectionClose}>✕</Text>
+                                </TouchableOpacity>
+                            </View>
+                            <Text style={styles.reflectionContent} numberOfLines={3}>{ref.content}</Text>
+                            {ref.hashtags && <Text style={styles.reflectionHashtags}>{ref.hashtags}</Text>}
+                        </TouchableOpacity>
+                    </Animated.View>
+                ))}
+            </ScrollView>
+        </Animated.View>
+    );
+};
+
 export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     const [appState, setAppState] = useState<AppState>('idle');
     const [isKeysConfigured, setIsKeysConfigured] = useState(false);
@@ -110,7 +165,50 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     // 🆕 Sprint 1.1: Text Input & ACE State
     const [textInput, setTextInput] = useState('');
     const [stagedConnections, setStagedConnections] = useState<Prediction[]>([]);
+    const [proposedReflections, setProposedReflections] = useState<any[]>([]);
     const textInputRef = React.useRef<TextInput>(null);
+    const { reflect } = useLocalSearchParams<{ reflect?: string }>();
+    const lastReflectedContent = useRef<string | null>(null);
+
+    // 🧠 Handle incoming "Reflect" triggers from Chronicle
+    useEffect(() => {
+        if (reflect && reflect !== lastReflectedContent.current) {
+            lastReflectedContent.current = reflect;
+            console.log('[Orbit] Received reflection trigger:', reflect);
+
+            // Auto-trigger a "deep dive" request
+            const reflectionPrompt = `I want to reflect more on this thought from my archive: "${reflect}". Let's dive deeper into what this means or how I can cultivate it.`;
+
+            // We delay slightly to let the screen mount
+            setTimeout(() => {
+                processTextMessage(reflectionPrompt);
+            }, 500);
+        }
+    }, [reflect]);
+
+    // 🧠 Save reflection handler
+    const handleSaveReflection = useCallback(async (reflection: any, index: number) => {
+        try {
+            Haptics.impactHeavy();
+            await saveSnippetWithDedup({
+                content: reflection.content,
+                type: reflection.type,
+                sentiment: reflection.sentiment || 'neutral',
+                topic: reflection.topic || 'Reflection',
+                hashtags: reflection.hashtags,
+            });
+            // Remove from staging
+            setProposedReflections(prev => prev.filter((_, i) => i !== index));
+            useContextStore.getState().triggerNodeRefresh();
+        } catch (e) {
+            console.error('[Orbit] Save failed:', e);
+        }
+    }, []);
+
+    const handleDismissReflection = useCallback((index: number) => {
+        Haptics.light();
+        setProposedReflections(prev => prev.filter((_, i) => i !== index));
+    }, []);
 
     // 🧠 ACE Predictions
     const predictions = usePredictions();
@@ -370,38 +468,13 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
             // 👻 Ghost Mode Check
             const ghostModeActive = useContextStore.getState().isGhostMode;
             if (ghostModeActive) {
-                if (__DEV__) console.log('[Orbit] 👻 Ghost Mode Active: Skipping memory save.');
-                // We still want edges for the session, but maybe not persistent? 
-                // For now, full privacy = no DB writes.
+                if (__DEV__) console.log('[Orbit] 👻 Ghost Mode Active: Skipping memory suggestions.');
             } else if (snippets.length > 0) {
-                await Promise.all(snippets.map(async snippet => {
-                    const result = await saveSnippetWithDedup({
-                        content: snippet.content,
-                        type: snippet.type,
-                        sentiment: snippet.sentiment,
-                        topic: snippet.topic,
-                        reasoning: finalReasoning,
-                    });
+                // Instead of auto-saving, we stage them for the user to confirm
+                setProposedReflections(prev => [...prev, ...snippets.map(s => ({ ...s, reasoning: finalReasoning }))]);
 
-                    // ⚡ Create edges for staged connections (Sprint 1.3)
-                    if (stagedEdges.length > 0 && result.snippetId) {
-                        if (__DEV__) {
-                            console.log('[Orbit] 🔗 Creating edges to:',
-                                stagedEdges.map(p => p.nodeId).join(', '));
-                        }
-
-                        // Persistent Edge Creation
-                        await Promise.all(stagedEdges.map(async edge => {
-                            await createEdge(result.snippetId!, edge.nodeId, edge.confidence);
-
-                            // 🎞️ Trigger "Synaptic Fire" Animation in Horizon
-                            useContextStore.getState().triggerSynapticFire(result.snippetId!, edge.nodeId);
-                        }));
-
-                        // Trigger global refresh to show new lines
-                        useContextStore.getState().triggerNodeRefresh();
-                    }
-                }));
+                // Still create non-persistent session edges if needed, but for now 
+                // we focus on the Interactive Extraction.
             }
             setEmbedding(false);
 
@@ -606,6 +679,13 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                 <View style={styles.suggestionsWrapper}>
                     <GhostSuggestionsContainer onConnectionCreated={handleAcceptPrediction} />
                 </View>
+
+                {/* 🪞 Mirror Reflections (Staging Area) */}
+                <ReflectionSuggester
+                    reflections={proposedReflections}
+                    onSave={handleSaveReflection}
+                    onDismiss={handleDismissReflection}
+                />
 
                 {/* Staged Connections (Bubbles) */}
                 {stagedConnections.length > 0 && (
@@ -1012,5 +1092,91 @@ const styles = StyleSheet.create({
     },
     sendIcon: {
         fontSize: 18,
+    },
+    // 🪞 Mirror Reflection Styles
+    reflectionContainer: {
+        position: 'absolute',
+        bottom: 120, // Above staged chips but below suggestions
+        left: 0,
+        right: 0,
+        paddingHorizontal: 20,
+        zIndex: 110,
+    },
+    reflectionHeader: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 10,
+        paddingHorizontal: 4,
+    },
+    reflectionTitle: {
+        fontSize: 10,
+        fontWeight: '800',
+        color: 'rgba(255, 255, 255, 0.4)',
+        textTransform: 'uppercase',
+        letterSpacing: 1.5,
+    },
+    reflectionDismiss: {
+        fontSize: 11,
+        color: '#666',
+        fontWeight: '600',
+    },
+    reflectionList: {
+        gap: 12,
+        paddingRight: 40,
+    },
+    reflectionCard: {
+        width: 240,
+        backgroundColor: 'rgba(30,30,40, 0.85)',
+        borderRadius: 20,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.08)',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.3,
+        shadowRadius: 15,
+        elevation: 10,
+    },
+    reflectionGoal: { borderColor: 'rgba(245, 158, 11, 0.3)' },
+    reflectionFeeling: { borderColor: 'rgba(236, 72, 153, 0.3)' },
+    reflectionFact: { borderColor: 'rgba(6, 182, 212, 0.3)' },
+    reflectionIconRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    reflectionType: {
+        fontSize: 9,
+        fontWeight: '900',
+        color: 'rgba(255, 255, 255, 0.3)',
+        letterSpacing: 1,
+    },
+    reflectionClose: {
+        fontSize: 14,
+        color: 'rgba(255, 255, 255, 0.2)',
+        padding: 4,
+    },
+    reflectionContent: {
+        fontSize: 14,
+        color: '#f8fafc',
+        lineHeight: 20,
+        fontWeight: '500',
+        marginBottom: 8,
+    },
+    reflectionHashtags: {
+        fontSize: 11,
+        color: '#6366f1',
+        fontWeight: '700',
+        opacity: 0.8,
+    },
+    // Adjust ACE positions to avoid overlap
+    suggestionsWrapper: {
+        position: 'absolute',
+        bottom: 240,
+        left: 0,
+        right: 0,
+        zIndex: 100,
     },
 });

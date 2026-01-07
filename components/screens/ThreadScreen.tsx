@@ -232,7 +232,7 @@ export const ThreadScreen = ({ focusNodeId, onClose }: ThreadScreenProps) => {
             const { getDb } = await import('@/db');
             const db = await getDb();
             const result = await db.execute('SELECT * FROM snippets WHERE id = ?', [focusNodeId]);
-            const focusNode = result.rows?.[0] as Snippet | undefined;
+            const focusNode = result.rows?.[0] as unknown as Snippet | undefined;
 
             if (focusNode) {
                 const threadContext = await buildThreadContext(focusNode);
@@ -251,7 +251,7 @@ export const ThreadScreen = ({ focusNodeId, onClose }: ThreadScreenProps) => {
 
     // Auto-close on idle (Contract enforcement)
     useEffect(() => {
-        let timer: NodeJS.Timeout;
+        let timer: ReturnType<typeof setTimeout>;
         if (ctcMode === 'IDLE') {
             timer = setTimeout(onClose, THREAD_CONTRACT.availability.autoCloseTimeout);
         }

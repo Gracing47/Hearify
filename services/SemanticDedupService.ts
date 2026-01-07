@@ -50,6 +50,7 @@ export interface SaveSnippetInput {
     sentiment?: 'analytical' | 'positive' | 'creative' | 'neutral';
     topic?: string;
     reasoning?: string;
+    hashtags?: string;
 }
 
 // ============================================================================
@@ -68,7 +69,7 @@ export interface SaveSnippetInput {
  * 5. User feedback (toasts)
  */
 export async function saveSnippetWithDedup(input: SaveSnippetInput): Promise<SaveSnippetResult> {
-    const { content, type, sentiment = 'neutral', topic = 'misc', reasoning } = input;
+    const { content, type, sentiment = 'neutral', topic = 'misc', reasoning, hashtags } = input;
 
     console.log('[SemanticDedup] Processing:', content.substring(0, 50) + '...');
 
@@ -136,7 +137,8 @@ export async function saveSnippetWithDedup(input: SaveSnippetInput): Promise<Sav
                         topic,
                         normalizedEmbedding,
                         embeddingFast,
-                        reasoning
+                        reasoning,
+                        hashtags
                     );
 
                     return result;
@@ -156,7 +158,8 @@ export async function saveSnippetWithDedup(input: SaveSnippetInput): Promise<Sav
             topic,
             undefined, // x
             undefined, // y
-            reasoning
+            reasoning,
+            hashtags
         );
 
         console.log('[SemanticDedup] Created new snippet:', snippetId);
@@ -199,16 +202,18 @@ async function executeMergeDecision(
     topic: string,
     newEmbedding: Float32Array,
     newEmbeddingFast: Float32Array | null,
-    reasoning?: string
+    reasoning?: string,
+    newHashtags?: string
 ): Promise<SaveSnippetResult> {
     const db = getDb();
+    const mergedHashtags = mergeHashtags(existingSnippet.hashtags, newHashtags);
 
     switch (decision.action) {
         case 'KEEP_OLD':
-            // Just update timestamp to bubble it up
+            // Just update timestamp to bubble it up and merge hashtags
             await db.execute(
-                'UPDATE snippets SET timestamp = ? WHERE id = ?',
-                [Date.now(), existingSnippet.id]
+                'UPDATE snippets SET timestamp = ?, hashtags = ? WHERE id = ?',
+                [Date.now(), mergedHashtags, existingSnippet.id]
             );
 
             toast.duplicate('Already Remembered', 'Similar memory exists');
@@ -229,10 +234,11 @@ async function executeMergeDecision(
                     type = ?,
                     sentiment = ?,
                     topic = ?,
+                    hashtags = ?,
                     timestamp = ?,
                     reasoning = ?
                 WHERE id = ?`,
-                [newContent, newType, sentiment, topic, Date.now(), reasoning ?? null, existingSnippet.id]
+                [newContent, newType, sentiment, topic, mergedHashtags, Date.now(), reasoning ?? null, existingSnippet.id]
             );
 
             // Update vector
@@ -261,10 +267,10 @@ async function executeMergeDecision(
 
         case 'MERGE_TAGS':
         case 'MERGE_CONTENT':
-            // Update timestamp and topic (soft merge)
+            // Update timestamp, topic and hashtags (soft merge)
             await db.execute(
-                'UPDATE snippets SET timestamp = ?, topic = ? WHERE id = ?',
-                [Date.now(), topic, existingSnippet.id]
+                'UPDATE snippets SET timestamp = ?, topic = ?, hashtags = ? WHERE id = ?',
+                [Date.now(), topic, mergedHashtags, existingSnippet.id]
             );
 
             toast.merged('Memory Linked', 'Added to existing thought');
@@ -289,7 +295,8 @@ async function executeMergeDecision(
                 topic,
                 undefined,
                 undefined,
-                reasoning
+                reasoning,
+                newHashtags
             );
 
             // Create semantic edge if related
@@ -298,8 +305,8 @@ async function executeMergeDecision(
                     await db.execute(
                         `INSERT OR IGNORE INTO semantic_edges 
                             (source_id, target_id, weight, created_at) 
-                        VALUES (?, ?, ?, ?)`,
-                        [snippetId, existingSnippet.id, decision.confidence, Date.now()]
+                        VALUES (?, ?, ?)`,
+                        [snippetId, existingSnippet.id, decision.confidence]
                     );
                 } catch (e) {
                     // Edge creation is non-critical
@@ -317,6 +324,30 @@ async function executeMergeDecision(
                 existingSnippetId: existingSnippet.id,
             };
     }
+}
+
+/**
+ * Helper to combine and deduplicate hashtag strings
+ */
+function mergeHashtags(oldTags?: string, newTags?: string): string {
+    const tags = new Set<string>();
+    const splitRegex = /[\s,]+/;
+
+    if (oldTags) {
+        oldTags.split(splitRegex).forEach(t => {
+            const tag = t.trim().toLowerCase();
+            if (tag) tags.add(tag.startsWith('#') ? tag : `#${tag}`);
+        });
+    }
+
+    if (newTags) {
+        newTags.split(splitRegex).forEach(t => {
+            const tag = t.trim().toLowerCase();
+            if (tag) tags.add(tag.startsWith('#') ? tag : `#${tag}`);
+        });
+    }
+
+    return Array.from(tags).join(' ');
 }
 
 // ============================================================================

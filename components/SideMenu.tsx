@@ -123,6 +123,21 @@ export function SideMenu({ isOpen, onClose }: SideMenuProps) {
                     {/* Footer */}
                     <View style={[styles.menuFooter, { paddingBottom: insets.bottom + 20 }]}>
                         <View style={styles.divider} />
+                        <TouchableOpacity
+                            style={styles.settingsItem}
+                            activeOpacity={0.7}
+                            onPress={async () => {
+                                const { NotificationService } = require('@/services/NotificationService');
+                                await NotificationService.sendLocalNotification(
+                                    '🧠 Neural Nudge',
+                                    'This is a test from your digital consciousness.'
+                                );
+                            }}
+                        >
+                            <Text style={styles.menuItemIcon}>🔔</Text>
+                            <Text style={styles.settingsLabel}>Test Notification</Text>
+                        </TouchableOpacity>
+
                         <TouchableOpacity style={styles.settingsItem} activeOpacity={0.7}>
                             <Text style={styles.menuItemIcon}>⚙️</Text>
                             <Text style={styles.settingsLabel}>Einstellungen</Text>

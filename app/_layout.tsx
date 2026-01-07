@@ -1,85 +1,71 @@
 import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack, useRouter, useSegments } from 'expo-router';
+import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, StyleSheet, useColorScheme, View } from 'react-native';
+import { ActivityIndicator, StyleSheet, Text, useColorScheme, View } from 'react-native';
 import 'react-native-reanimated';
 
 import { initDatabase } from '../db';
+import { NotificationService } from '../services/NotificationService';
 import { getProfileDbName, useProfileStore } from '../store/profile';
+
 
 export const unstable_settings = {
   anchor: '(tabs)',
 };
 
-export default function RootLayout() {
-  const colorScheme = useColorScheme();
-  const router = useRouter();
-  const segments = useSegments();
-
-  const { currentProfile, isLoading, loadProfiles } = useProfileStore();
-  const [isDbReady, setIsDbReady] = useState(false);
-
-  // Load profiles on app start
-  useEffect(() => {
-    loadProfiles();
-  }, []);
-
-  // Initialize database when profile changes
-  useEffect(() => {
-    if (isLoading) return;
-
-    const initDb = async () => {
-      const dbName = getProfileDbName(currentProfile);
-      await initDatabase(dbName);
-      setIsDbReady(true);
-    };
-
-    initDb();
-  }, [currentProfile, isLoading]);
-
-  // Handle routing based on profile state
-  useEffect(() => {
-    if (isLoading || !isDbReady) return;
-
-    const inOnboarding = segments[0] === 'onboarding';
-
-    if (!currentProfile) {
-      // No profile exists, go to onboarding
-      if (!inOnboarding) {
-        router.replace('/onboarding' as any);
-      }
-    } else if (!currentProfile.isOnboarded) {
-      // Profile exists but onboarding not complete
-      if (!inOnboarding) {
-        router.replace('/onboarding' as any);
-      }
-    } else {
-      // Profile is ready, go to main app
-      if (inOnboarding) {
-        router.replace('/(tabs)' as any);
-      }
-    }
-  }, [currentProfile, isLoading, isDbReady, segments]);
-
-  // Show loading screen while initializing
-  if (isLoading || !isDbReady) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#6366f1" />
-      </View>
-    );
-  }
-
+function AppContent({ colorScheme }: { colorScheme: 'light' | 'dark' }) {
   return (
     <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
-        <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="onboarding" />
       </Stack>
       <StatusBar style="auto" />
     </ThemeProvider>
   );
+}
+
+export default function RootLayout() {
+  const colorScheme = useColorScheme() ?? 'dark';
+  const { currentProfile, isLoading, loadProfiles } = useProfileStore();
+  const [isDbReady, setIsDbReady] = useState(false);
+
+  // 1. Initial Setup (Profile + Notifications)
+  useEffect(() => {
+    loadProfiles().catch(console.error);
+    NotificationService.requestPermissions().catch(console.error);
+  }, []);
+
+  // 2. Database Sync
+  useEffect(() => {
+    if (isLoading) return;
+
+    const dbName = getProfileDbName(currentProfile);
+    initDatabase(dbName)
+      .then(() => setIsDbReady(true))
+      .catch(err => {
+        console.error('[DB] Failed:', err);
+        setIsDbReady(true); // Fallback
+      });
+  }, [currentProfile?.id, isLoading]);
+
+  // Handle Loading State
+  if (isLoading || !isDbReady) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#6366f1" />
+        <View style={{ marginTop: 20 }}>
+          <Text style={{ color: '#666', fontSize: 12 }}>
+            {isLoading ? 'Loading your mind...' : 'Waking up the neural archive...'}
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
+  // Final App Render
+  return <AppContent colorScheme={colorScheme as any} />;
 }
 
 const styles = StyleSheet.create({

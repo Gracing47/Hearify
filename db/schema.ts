@@ -7,6 +7,8 @@
 
 export interface Snippet {
   cluster_id: number;
+  cluster_label?: string;
+  hashtags?: string; // Comma-separated or space-separated tags like #google #work
   id: number;
   content: string;
   type: 'fact' | 'feeling' | 'goal';
@@ -45,6 +47,7 @@ export const SCHEMA = {
       last_accessed INTEGER,
       cluster_id INTEGER,
       cluster_label TEXT,
+      hashtags TEXT,
       reasoning TEXT,
       utility_data TEXT DEFAULT '{}'
     );
@@ -166,6 +169,7 @@ export const SCHEMA = {
     `ALTER TABLE snippets ADD COLUMN last_accessed INTEGER;`,
     `ALTER TABLE snippets ADD COLUMN cluster_label TEXT;`,
     `ALTER TABLE snippets ADD COLUMN reasoning TEXT;`,
-    `ALTER TABLE snippets ADD COLUMN utility_data TEXT DEFAULT '{}';`
+    `ALTER TABLE snippets ADD COLUMN utility_data TEXT DEFAULT '{}';`,
+    `ALTER TABLE snippets ADD COLUMN hashtags TEXT;`
   ]
 };

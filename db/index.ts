@@ -55,14 +55,38 @@ async function initDatabaseInternal(targetDbName: string): Promise<DB> {
         currentDbName = targetDbName;
 
         // Open database (JSI-based, instant)
+        console.log('[DB] Opening database...');
         db = open({ name: targetDbName });
         console.log(`[DB] Database opened: ${targetDbName}`);
 
-        // Execute schema statements
-        const statements = [
-            SCHEMA.snippets,
-            SCHEMA.vectorTableFast,
-            SCHEMA.vectorTableRich,
+        // Execute core schema (snippets table)
+        console.log('[DB] Creating snippets table...');
+        try {
+            const snippetQueries = SCHEMA.snippets.split(';').map(s => s.trim()).filter(s => s.length > 0);
+            for (const query of snippetQueries) {
+                await db.execute(query);
+            }
+            console.log('[DB] Snippets table ready');
+        } catch (e: any) {
+            if (!e.message?.includes('already exists')) {
+                console.warn('[DB] Snippets schema warning:', e.message);
+            }
+        }
+
+        // Execute vector tables (may fail in Expo Go without native build)
+        console.log('[DB] Creating vector tables...');
+        const vectorStatements = [SCHEMA.vectorTableFast, SCHEMA.vectorTableRich];
+        for (const stmt of vectorStatements) {
+            try {
+                await db.execute(stmt);
+            } catch (e: any) {
+                console.warn('[DB] Vector table warning (expected in Expo Go):', e.message?.slice(0, 80));
+            }
+        }
+
+        // Execute other tables
+        console.log('[DB] Creating other tables...');
+        const otherStatements = [
             SCHEMA.semanticEdges,
             SCHEMA.clusterCentroids,
             SCHEMA.externalResources,
@@ -71,20 +95,21 @@ async function initDatabaseInternal(targetDbName: string): Promise<DB> {
             SCHEMA.feedbackSignals
         ];
 
-        for (const sqlBlock of statements) {
+        for (const sqlBlock of otherStatements) {
             const queries = sqlBlock.split(';').map(s => s.trim()).filter(s => s.length > 0);
             for (const query of queries) {
                 try {
                     await db.execute(query);
                 } catch (e: any) {
                     if (!e.message?.includes('already exists')) {
-                        console.warn(`[DB] Schema Warning: ${e.message}`);
+                        console.warn(`[DB] Schema Warning: ${e.message?.slice(0, 80)}`);
                     }
                 }
             }
         }
 
         // Run migrations
+        console.log('[DB] Running migrations...');
         for (const migration of SCHEMA.migrations) {
             try {
                 await db.execute(migration);
@@ -152,7 +177,8 @@ export async function insertSnippet(
     topic: string = 'misc',
     x: number = (Math.random() * 400) - 200,
     y: number = (Math.random() * 400) - 200,
-    reasoning?: string
+    reasoning?: string,
+    hashtags?: string
 ): Promise<number> {
     const database = getDb();
     const timestamp = Date.now();
@@ -160,8 +186,8 @@ export async function insertSnippet(
     try {
         // 1. Insert into main table with sentiment and topic
         const result = await database.execute(
-            'INSERT INTO snippets (content, type, sentiment, topic, timestamp, x, y, reasoning) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-            [content, type, sentiment, topic, timestamp, x, y, reasoning ?? null]
+            'INSERT INTO snippets (content, type, sentiment, topic, hashtags, timestamp, x, y, reasoning) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [content, type, sentiment, topic, hashtags ?? null, timestamp, x, y, reasoning ?? null]
         );
 
         const snippetId = result.insertId!;
@@ -196,6 +222,20 @@ export async function insertSnippet(
     }
 }
 
+
+export async function updateSnippetImportance(id: number, importance: number): Promise<void> {
+    const database = getDb();
+    try {
+        await database.execute(
+            'UPDATE snippets SET importance = ? WHERE id = ?',
+            [importance, id]
+        );
+        console.log(`[DB] Updated importance for snippet ${id} to ${importance}`);
+    } catch (error) {
+        console.error('[DB] Failed to update importance:', error);
+        throw error;
+    }
+}
 
 /**
  * Find similar snippets using native sqlite-vec search

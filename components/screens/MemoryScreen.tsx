@@ -8,12 +8,14 @@
  * - Time-Travel Navigation (Tap -> Focus in Horizon)
  */
 
-import { getAllSnippets } from '@/db';
+import { getAllSnippets, updateSnippetImportance } from '@/db';
 import { Snippet } from '@/db/schema';
 import { useContextStore } from '@/store/contextStore';
+import { useLensStore } from '@/store/lensStore';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { LinearGradient } from 'expo-linear-gradient';
+import { useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
     Pressable,
@@ -22,6 +24,7 @@ import {
     Text,
     View
 } from 'react-native';
+import { TouchableOpacity } from 'react-native-gesture-handler';
 import Animated, {
     FadeIn,
     FadeInUp
@@ -234,11 +237,39 @@ interface TimelineItemProps {
     isFirst: boolean;
     isLast: boolean;
     onPress: () => void;
+    onRefresh: () => void;
 }
 
-const TimelineItem = React.memo(({ snippet, index, isFirst, isLast, onPress }: TimelineItemProps) => {
+const TimelineItem = React.memo(({ snippet, index, isFirst, isLast, onPress, onRefresh }: TimelineItemProps) => {
     const config = TYPE_CONFIG[snippet.type as keyof typeof TYPE_CONFIG] || TYPE_CONFIG.fact;
     const timeStr = new Date(snippet.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const router = useRouter();
+    const { setMode } = useLensStore();
+
+    const handleStar = useCallback(async () => {
+        try {
+            const newImportance = snippet.importance > 0 ? 0 : 1;
+            await updateSnippetImportance(snippet.id, newImportance);
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            onRefresh();
+        } catch (e) {
+            console.error('[Chronicle] Star failed:', e);
+        }
+    }, [snippet.id, snippet.importance, onRefresh]);
+
+    const handlePlan = useCallback(() => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        setMode('STRATEGY');
+        useContextStore.getState().setActiveScreen('horizon');
+        // No router.replace needed as we are in Panorama
+    }, [setMode]);
+
+    const handleReflect = useCallback(() => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        // Pass data via params to the shared route
+        router.setParams({ reflect: snippet.content });
+        useContextStore.getState().setActiveScreen('orbit');
+    }, [snippet.content, router]);
 
     return (
         <Pressable
@@ -264,10 +295,40 @@ const TimelineItem = React.memo(({ snippet, index, isFirst, isLast, onPress }: T
                     <Text style={styles.timelineTime}>{timeStr}</Text>
                 </View>
                 <Text style={styles.timelineContent} numberOfLines={3}>{snippet.content}</Text>
+
+                {snippet.hashtags && (
+                    <View style={styles.hashtagsRow}>
+                        {snippet.hashtags.split(' ').map((tag, i) => (
+                            <Text key={i} style={styles.hashtagText}>{tag}</Text>
+                        ))}
+                    </View>
+                )}
+
                 <View style={styles.timelineCardFooter}>
+                    <View style={styles.actionRow}>
+                        <TouchableOpacity style={styles.actionBtn} onPress={handleStar}>
+                            <Ionicons
+                                name={snippet.importance > 0 ? "star" : "star-outline"}
+                                size={16}
+                                color={snippet.importance > 0 ? "#F59E0B" : "rgba(255, 255, 255, 0.4)"}
+                            />
+                            <Text style={[styles.actionBtnText, snippet.importance > 0 && { color: '#F59E0B' }]}>Star</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity style={styles.actionBtn} onPress={handlePlan}>
+                            <Ionicons name="layers-outline" size={16} color="rgba(255, 255, 255, 0.4)" />
+                            <Text style={styles.actionBtnText}>Plan</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity style={[styles.actionBtn, styles.actionBtnActive]} onPress={handleReflect}>
+                            <Ionicons name="chatbubble-ellipses-outline" size={16} color="#6366f1" />
+                            <Text style={[styles.actionBtnText, { color: '#818cf8' }]}>Reflect</Text>
+                        </TouchableOpacity>
+                    </View>
+
                     <Pressable style={styles.viewInHorizonBtn} onPress={onPress}>
                         <Ionicons name="compass-outline" size={14} color="#6366f1" />
-                        <Text style={styles.viewInHorizonText}>View in Horizon</Text>
+                        <Text style={styles.viewInHorizonText}>View</Text>
                     </Pressable>
                 </View>
             </View>
@@ -276,6 +337,7 @@ const TimelineItem = React.memo(({ snippet, index, isFirst, isLast, onPress }: T
 }, (prevProps, nextProps) => {
     // Custom comparison - only re-render if these change
     return prevProps.snippet.id === nextProps.snippet.id &&
+        prevProps.snippet.importance === nextProps.snippet.importance &&
         prevProps.isFirst === nextProps.isFirst &&
         prevProps.isLast === nextProps.isLast;
 });
@@ -383,6 +445,7 @@ export function MemoryScreen() {
             isFirst={index === 0}
             isLast={index === section.data.length - 1}
             onPress={() => handleNavigateToNode(item.id)}
+            onRefresh={onRefresh}
         />
     );
 
@@ -662,21 +725,61 @@ const styles = StyleSheet.create({
     timelineCardFooter: {
         marginTop: 12,
         flexDirection: 'row',
-        justifyContent: 'flex-end',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    actionRow: {
+        flexDirection: 'row',
+        gap: 6, // Tighter gap
+        flex: 1, // Allow taking available space
+    },
+    actionBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingHorizontal: 6, // Reduced padding
+        paddingVertical: 4,
+        borderRadius: 8,
+        backgroundColor: 'rgba(255, 255, 255, 0.03)',
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.05)',
+    },
+    actionBtnActive: {
+        backgroundColor: 'rgba(99, 102, 241, 0.1)',
+        borderColor: 'rgba(99, 102, 241, 0.2)',
+    },
+    actionBtnText: {
+        fontSize: 9, // Smaller text
+        color: 'rgba(255, 255, 255, 0.5)',
+        fontWeight: '700',
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
     },
     viewInHorizonBtn: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 4,
-        paddingHorizontal: 10,
-        paddingVertical: 6,
-        borderRadius: 12,
+        paddingHorizontal: 8,
+        paddingVertical: 5,
+        borderRadius: 10,
         backgroundColor: 'rgba(99, 102, 241, 0.15)',
+        marginLeft: 8, // Ensure spacing from actions
     },
     viewInHorizonText: {
-        fontSize: 11,
+        fontSize: 10,
         color: '#6366f1',
-        fontWeight: '600',
+        fontWeight: '700',
+    },
+    hashtagsRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        gap: 6,
+        marginTop: 10,
+    },
+    hashtagText: {
+        fontSize: 11,
+        color: 'rgba(255, 255, 255, 0.4)',
+        fontWeight: '500',
     },
 
     // Empty State
