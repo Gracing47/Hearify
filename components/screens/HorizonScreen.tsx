@@ -6,6 +6,7 @@
 
 import { NeuralCanvas } from '@/components/NeuralCanvas';
 import { NeuralLensesHUD } from '@/components/NeuralLensesHUD';
+import { useContextStore } from '@/store/contextStore';
 import { LinearGradient } from 'expo-linear-gradient';
 import React, { useEffect } from 'react';
 import { StatusBar, StyleSheet, Text, View } from 'react-native';
@@ -27,6 +28,7 @@ interface HorizonScreenProps {
 
 export function HorizonScreen({ layoutY, cameraZ }: HorizonScreenProps) {
     const insets = useSafeAreaInsets();
+    const focusNodeId = useContextStore(state => state.focusNodeId);
 
     // Animated pulse for the "LIVE" indicator
     const pulseOpacity = useSharedValue(1);
@@ -41,6 +43,21 @@ export function HorizonScreen({ layoutY, cameraZ }: HorizonScreenProps) {
             true
         );
     }, []);
+
+    // Handle focus node from Chronicle "Plan" action
+    useEffect(() => {
+        if (focusNodeId !== null) {
+            console.log(`[Horizon] Focusing on node ${focusNodeId} from Chronicle Plan action`);
+            
+            // Clear focus after handling to prevent re-triggering
+            // NeuralCanvas will handle the actual camera movement and highlight
+            const timer = setTimeout(() => {
+                useContextStore.getState().setFocusNode(null);
+            }, 100);
+
+            return () => clearTimeout(timer);
+        }
+    }, [focusNodeId]);
 
     const pulseStyle = useAnimatedStyle(() => ({
         opacity: pulseOpacity.value,

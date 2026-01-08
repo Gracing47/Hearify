@@ -161,6 +161,40 @@ export const SCHEMA = {
     CREATE INDEX IF NOT EXISTS idx_feedback_target ON feedback_signals(target_node_id);
   `,
 
+  // Entity Extraction: Named Entity Recognition & Coreference Resolution
+  entities: `
+    CREATE TABLE IF NOT EXISTS entities (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL CHECK(type IN ('person', 'date', 'place', 'event', 'concept')),
+      properties TEXT DEFAULT '{}',
+      first_mentioned_in INTEGER NOT NULL,
+      last_mentioned_in INTEGER NOT NULL,
+      mention_count INTEGER DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY(first_mentioned_in) REFERENCES snippets(id) ON DELETE SET NULL,
+      FOREIGN KEY(last_mentioned_in) REFERENCES snippets(id) ON DELETE SET NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name COLLATE NOCASE);
+    CREATE INDEX IF NOT EXISTS idx_entities_type ON entities(type);
+  `,
+
+  entityMentions: `
+    CREATE TABLE IF NOT EXISTS entity_mentions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      entity_id INTEGER NOT NULL,
+      snippet_id INTEGER NOT NULL,
+      mention_text TEXT NOT NULL,
+      context TEXT,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY(entity_id) REFERENCES entities(id) ON DELETE CASCADE,
+      FOREIGN KEY(snippet_id) REFERENCES snippets(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_mentions_entity ON entity_mentions(entity_id);
+    CREATE INDEX IF NOT EXISTS idx_mentions_snippet ON entity_mentions(snippet_id);
+  `,
+
   // Migrations for schema evolution
   migrations: [
     `ALTER TABLE snippets ADD COLUMN z REAL DEFAULT 0;`,

@@ -12,8 +12,15 @@ export const useCameraFlight = (
     cameraZ: SharedValue<number>
 ) => {
 
+    // Temporary kill switch while Chronicle/Orbit handoff is refined.
+    const FLIGHT_ENABLED = false;
+
     const flyToNode = useCallback((x: number, y: number, z: number) => {
         'worklet';
+
+        if (!FLIGHT_ENABLED) {
+            return;
+        }
 
         // 1. Calculate target position
         // Target Z: We want to be slightly "behind" the node to see it

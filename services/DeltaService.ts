@@ -19,26 +19,55 @@ export interface DailyDelta {
     nodeCount: number;
     topClusters: string[];
     createdAt: number;
+    gffBreakdown?: {
+        goals: number;
+        facts: number;
+        feelings: number;
+        primaryGoal?: string;
+        dominantFeeling?: string;
+        keyInsight?: string;
+    };
 }
 
-const DELTA_PROMPT = `You are an intelligent reflection engine for a personal memory app.
+const DELTA_PROMPT = `You are an intelligent reflection engine for Hearify, a cognitive operating system.
 
-Given the user's thoughts from the past 24 hours, generate a brief morning reflection.
+Given the user's thoughts from the past 24 hours, generate a strategic daily summary using the GFF Framework (Goals, Feelings, Facts).
 
-REQUIREMENTS:
-1. Write a 2-3 sentence summary capturing the main theme or focus
-2. Identify 2-4 key highlights (short phrases)
-3. Determine the overall mood: analytical, reflective, creative, or mixed
-4. If no meaningful patterns exist, acknowledge this gracefully
+YOUR TASK:
+Analyze the thoughts and create a synthesis that:
+1. Identifies the primary GOAL focus (what they're working toward)
+2. Counts key FACTS recorded (insights, learnings, data points)
+3. Assesses FEELINGS state (energy, friction, motivation)
+4. Suggests strategic adjustments if needed
 
 RESPONSE FORMAT (strict JSON):
 {
-  "summary": "Your personalized summary here...",
-  "highlights": ["highlight 1", "highlight 2"],
-  "mood": "reflective"
+  "summary": "Today you focused on [Goal: X]. You recorded Y [Facts] regarding Z, but your [Feelings] suggest A. Shall we adjust the plan for tomorrow?",
+  "highlights": ["Primary goal: X", "Y facts captured", "Energy: high/low", "Friction detected in: Z"],
+  "mood": "analytical",
+  "gffBreakdown": {
+    "goals": 3,
+    "facts": 7,
+    "feelings": 2,
+    "primaryGoal": "Become top AM at Google",
+    "dominantFeeling": "motivated",
+    "keyInsight": "Best work happens in morning"
+  }
 }
 
-Be warm, concise, and insightful. No fluff.`;
+MOOD CLASSIFICATION:
+- "analytical" - Heavy on facts and goal-planning
+- "reflective" - Balanced feelings and introspection
+- "creative" - Exploratory, ideation-focused
+- "mixed" - Varied activity across GFF
+
+GFF SYNTHESIS RULES:
+1. If goals > 5: User is in planning mode → encourage focus
+2. If feelings show friction: Suggest goal adjustment or break
+3. If facts dominate: User is learning → validate progress
+4. If no clear goal detected: Suggest defining one
+
+Be strategic, concise, and actionable. This is JARVIS, not a passive journal.`;
 
 /**
  * Generate a Daily Delta for a specific date
@@ -77,6 +106,13 @@ export async function generateDelta(targetDate: Date = new Date()): Promise<Dail
         return null; // No data for this day
     }
 
+    // Calculate GFF counts
+    const gffCounts = {
+        goals: snippets.filter((s: any) => s.type === 'goal').length,
+        facts: snippets.filter((s: any) => s.type === 'fact').length,
+        feelings: snippets.filter((s: any) => s.type === 'feeling').length,
+    };
+
     // Build context for AI
     const thoughtsText = snippets
         .map((s: any) => `[${s.type.toUpperCase()}] ${s.content}`)
@@ -89,8 +125,8 @@ export async function generateDelta(targetDate: Date = new Date()): Promise<Dail
     );
     const topClusters = (clustersResult.rows || []).map((r: any) => r.cluster_label).filter(Boolean);
 
-    // Generate summary with AI
-    const aiResult = await callDeepSeekDelta(thoughtsText);
+    // Generate summary with AI (pass GFF counts for context)
+    const aiResult = await callDeepSeekDelta(thoughtsText, gffCounts);
 
     if (!aiResult) {
         console.warn('[DeltaService] AI generation failed');
@@ -174,13 +210,20 @@ export async function generateYesterdayDelta(): Promise<DailyDelta | null> {
 
 type MoodType = 'analytical' | 'reflective' | 'creative' | 'mixed';
 
-async function callDeepSeekDelta(thoughts: string): Promise<{ summary: string; highlights: string[]; mood: MoodType } | null> {
+async function callDeepSeekDelta(
+    thoughts: string,
+    gffCounts?: { goals: number; facts: number; feelings: number }
+): Promise<{ summary: string; highlights: string[]; mood: MoodType; gffBreakdown?: any } | null> {
     try {
         const apiKey = await getDeepSeekKey();
         if (!apiKey) {
             console.warn('[DeltaService] No DeepSeek API key');
             return null;
         }
+
+        const gffContext = gffCounts
+            ? `\n\n[GFF COUNTS] Goals: ${gffCounts.goals}, Facts: ${gffCounts.facts}, Feelings: ${gffCounts.feelings}`
+            : '';
 
         const response = await fetch(DEEPSEEK_API_URL, {
             method: 'POST',
@@ -192,7 +235,7 @@ async function callDeepSeekDelta(thoughts: string): Promise<{ summary: string; h
                 model: 'deepseek-chat',
                 messages: [
                     { role: 'system', content: DELTA_PROMPT },
-                    { role: 'user', content: `Here are the thoughts from yesterday:\n\n${thoughts}` }
+                    { role: 'user', content: `Here are the thoughts from yesterday:${gffContext}\n\n${thoughts}` }
                 ],
                 temperature: 0.7,
                 max_tokens: 500
@@ -221,7 +264,8 @@ async function callDeepSeekDelta(thoughts: string): Promise<{ summary: string; h
         return {
             summary: parsed.summary || 'No summary available.',
             highlights: Array.isArray(parsed.highlights) ? parsed.highlights : [],
-            mood
+            mood,
+            gffBreakdown: parsed.gffBreakdown || undefined
         };
     } catch (error) {
         console.error('[DeltaService] Generation error:', error);

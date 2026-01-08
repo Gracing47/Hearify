@@ -37,23 +37,23 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const TYPE_CONFIG = {
     fact: {
-        color: '#00F0FF',
-        bgColor: 'rgba(0, 240, 255, 0.08)',
-        borderColor: 'rgba(0, 240, 255, 0.25)',
+        color: '#08d0ff',
+        bgColor: 'rgba(8, 208, 255, 0.12)',
+        borderColor: 'rgba(8, 208, 255, 0.32)',
         icon: 'book-outline' as const,
         label: 'FACT',
     },
     feeling: {
-        color: '#FF0055',
-        bgColor: 'rgba(255, 0, 85, 0.08)',
-        borderColor: 'rgba(255, 0, 85, 0.25)',
+        color: '#ff1f6d',
+        bgColor: 'rgba(255, 31, 109, 0.14)',
+        borderColor: 'rgba(255, 31, 109, 0.4)',
         icon: 'heart-outline' as const,
         label: 'FEELING',
     },
     goal: {
-        color: '#FFD700',
-        bgColor: 'rgba(255, 215, 0, 0.08)',
-        borderColor: 'rgba(255, 215, 0, 0.25)',
+        color: '#ffd54f',
+        bgColor: 'rgba(255, 213, 79, 0.12)',
+        borderColor: 'rgba(255, 213, 79, 0.35)',
         icon: 'flag-outline' as const,
         label: 'GOAL',
     },
@@ -240,6 +240,41 @@ interface TimelineItemProps {
     onRefresh: () => void;
 }
 
+const ActionButton = ({
+    label,
+    icon,
+    onPress,
+    active,
+    emphasis
+}: {
+    label: string;
+    icon: keyof typeof Ionicons.glyphMap;
+    onPress: () => void;
+    active?: boolean;
+    emphasis?: boolean;
+}) => (
+    <TouchableOpacity
+        style={[styles.actionBtn, emphasis && styles.actionBtnActive]}
+        onPress={onPress}
+        hitSlop={8}
+    >
+        <Ionicons
+            name={icon}
+            size={16}
+            color={active ? '#F59E0B' : emphasis ? '#7c83ff' : 'rgba(255, 255, 255, 0.6)'}
+        />
+        <Text
+            style={[
+                styles.actionBtnText,
+                active && { color: '#F59E0B' },
+                emphasis && { color: '#7c83ff' }
+            ]}
+        >
+            {label}
+        </Text>
+    </TouchableOpacity>
+);
+
 const TimelineItem = React.memo(({ snippet, index, isFirst, isLast, onPress, onRefresh }: TimelineItemProps) => {
     const config = TYPE_CONFIG[snippet.type as keyof typeof TYPE_CONFIG] || TYPE_CONFIG.fact;
     const timeStr = new Date(snippet.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -259,17 +294,33 @@ const TimelineItem = React.memo(({ snippet, index, isFirst, isLast, onPress, onR
 
     const handlePlan = useCallback(() => {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        
+        // Set Strategy lens for goal planning
         setMode('STRATEGY');
+        
+        // Focus on this specific snippet in Horizon
+        useContextStore.getState().setFocusNode(snippet.id);
+        
+        // Navigate to Horizon
         useContextStore.getState().setActiveScreen('horizon');
-        // No router.replace needed as we are in Panorama
-    }, [setMode]);
+        
+        console.log(`[Chronicle] Plan: Focusing node ${snippet.id} in Horizon (Strategy mode)`);
+    }, [setMode, snippet.id]);
 
     const handleReflect = useCallback(() => {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        // Pass data via params to the shared route
-        router.setParams({ reflect: snippet.content });
+        
+        // Pass snippet content to Orbit for reflection
+        router.setParams({ 
+            reflect: snippet.content,
+            snippetId: snippet.id.toString()
+        });
+        
+        // Navigate to Orbit
         useContextStore.getState().setActiveScreen('orbit');
-    }, [snippet.content, router]);
+        
+        console.log(`[Chronicle] Reflect: Opening Orbit with snippet ${snippet.id}`);
+    }, [snippet.content, snippet.id, router]);
 
     return (
         <Pressable
@@ -294,7 +345,7 @@ const TimelineItem = React.memo(({ snippet, index, isFirst, isLast, onPress, onR
                     <Text style={[styles.timelineType, { color: config.color }]}>{config.label}</Text>
                     <Text style={styles.timelineTime}>{timeStr}</Text>
                 </View>
-                <Text style={styles.timelineContent} numberOfLines={3}>{snippet.content}</Text>
+                <Text style={styles.timelineContent} numberOfLines={4}>{snippet.content}</Text>
 
                 {snippet.hashtags && (
                     <View style={styles.hashtagsRow}>
@@ -306,30 +357,17 @@ const TimelineItem = React.memo(({ snippet, index, isFirst, isLast, onPress, onR
 
                 <View style={styles.timelineCardFooter}>
                     <View style={styles.actionRow}>
-                        <TouchableOpacity style={styles.actionBtn} onPress={handleStar}>
-                            <Ionicons
-                                name={snippet.importance > 0 ? "star" : "star-outline"}
-                                size={16}
-                                color={snippet.importance > 0 ? "#F59E0B" : "rgba(255, 255, 255, 0.4)"}
-                            />
-                            <Text style={[styles.actionBtnText, snippet.importance > 0 && { color: '#F59E0B' }]}>Star</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={styles.actionBtn} onPress={handlePlan}>
-                            <Ionicons name="layers-outline" size={16} color="rgba(255, 255, 255, 0.4)" />
-                            <Text style={styles.actionBtnText}>Plan</Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity style={[styles.actionBtn, styles.actionBtnActive]} onPress={handleReflect}>
-                            <Ionicons name="chatbubble-ellipses-outline" size={16} color="#6366f1" />
-                            <Text style={[styles.actionBtnText, { color: '#818cf8' }]}>Reflect</Text>
-                        </TouchableOpacity>
+                        <ActionButton
+                            label="Star"
+                            icon={snippet.importance > 0 ? 'star' : 'star-outline'}
+                            onPress={handleStar}
+                            active={snippet.importance > 0}
+                        />
+                        <ActionButton label="Plan" icon="layers-outline" onPress={handlePlan} />
+                        <ActionButton label="Reflect" icon="chatbubble-ellipses-outline" onPress={handleReflect} emphasis />
                     </View>
 
-                    <Pressable style={styles.viewInHorizonBtn} onPress={onPress}>
-                        <Ionicons name="compass-outline" size={14} color="#6366f1" />
-                        <Text style={styles.viewInHorizonText}>View</Text>
-                    </Pressable>
+                    {/* View button hidden - double-tap card to view in Horizon */}
                 </View>
             </View>
         </Pressable>
@@ -360,13 +398,16 @@ export function MemoryScreen() {
     const nodeRefreshTrigger = useContextStore(state => state.nodeRefreshTrigger);
 
     const loadSnippets = useCallback(async () => {
+        console.log('[Chronicle] Loading snippets...');
         const data = await getAllSnippets();
+        console.log('[Chronicle] Loaded', data.length, 'snippets');
         setSnippets(data);
     }, []);
 
     useEffect(() => {
+        console.log('[Chronicle] Refresh triggered, nodeRefreshTrigger:', nodeRefreshTrigger);
         loadSnippets();
-    }, [nodeRefreshTrigger]);
+    }, [nodeRefreshTrigger, loadSnippets]);
 
     const onRefresh = async () => {
         setRefreshing(true);
@@ -428,7 +469,9 @@ export function MemoryScreen() {
 
     const handleNavigateToNode = useCallback((snippetId: number) => {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        useContextStore.getState().navigateToNode(snippetId);
+        // Transition to Horizon disabled - keeping user in Chronicle
+        console.log('[Chronicle] View action for node:', snippetId, '(transition disabled)');
+        // useContextStore.getState().navigateToNode(snippetId);
     }, []);
 
     const renderSectionHeader = ({ section }: { section: Section }) => (
@@ -495,7 +538,7 @@ export function MemoryScreen() {
                                         style={[
                                             styles.filterPill,
                                             filter === f && styles.filterPillActive,
-                                            filter === f && config && { borderColor: config.color }
+                                            filter === f && config && { borderColor: config.color, backgroundColor: `${config.color}18` }
                                         ]}
                                         onPress={() => {
                                             Haptics.selectionAsync();
@@ -549,7 +592,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
     },
     title: {
-        fontSize: 32,
+        fontSize: 30,
         fontWeight: '800',
         color: '#fff',
         letterSpacing: -1,
@@ -626,19 +669,19 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 6,
-        paddingHorizontal: 14,
-        paddingVertical: 8,
+        paddingHorizontal: 16,
+        paddingVertical: 10,
         borderRadius: 20,
-        backgroundColor: 'rgba(255, 255, 255, 0.05)',
+        backgroundColor: 'rgba(255, 255, 255, 0.04)',
         borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.1)',
+        borderColor: 'rgba(255, 255, 255, 0.08)',
     },
     filterPillActive: {
-        backgroundColor: 'rgba(99, 102, 241, 0.15)',
-        borderColor: 'rgba(99, 102, 241, 0.4)',
+        backgroundColor: 'rgba(99, 102, 241, 0.12)',
+        borderColor: 'rgba(99, 102, 241, 0.3)',
     },
     filterPillText: {
-        fontSize: 13,
+        fontSize: 14,
         fontWeight: '600',
         color: '#888',
     },
@@ -655,28 +698,28 @@ const styles = StyleSheet.create({
         marginTop: 8,
     },
     sectionTitle: {
-        fontSize: 18,
+        fontSize: 22,
         fontWeight: '700',
         color: '#fff',
     },
     sectionCount: {
-        fontSize: 12,
-        color: '#666',
-        fontWeight: '500',
+        fontSize: 13,
+        color: '#7a7a7a',
+        fontWeight: '600',
     },
 
     // Timeline
     timelineItem: {
         flexDirection: 'row',
-        marginBottom: 4,
+        marginBottom: 10,
     },
     timelineLine: {
-        width: 40,
+        width: 48,
         alignItems: 'center',
     },
     timelineLineSegment: {
         width: 2,
-        backgroundColor: 'rgba(255, 255, 255, 0.1)',
+        backgroundColor: 'rgba(255, 255, 255, 0.08)',
         flex: 1,
     },
     timelineLineTop: {
@@ -686,9 +729,9 @@ const styles = StyleSheet.create({
         marginTop: 4,
     },
     timelineNode: {
-        width: 32,
-        height: 32,
-        borderRadius: 16,
+        width: 28,
+        height: 28,
+        borderRadius: 14,
         borderWidth: 2,
         justifyContent: 'center',
         alignItems: 'center',
@@ -696,10 +739,15 @@ const styles = StyleSheet.create({
     },
     timelineCard: {
         flex: 1,
-        borderRadius: 16,
-        padding: 14,
+        borderRadius: 18,
+        padding: 16,
         borderWidth: 1,
-        marginBottom: 12,
+        marginBottom: 16,
+        shadowColor: '#000',
+        shadowOpacity: 0.3,
+        shadowRadius: 12,
+        shadowOffset: { width: 0, height: 8 },
+        elevation: 3,
     },
     timelineCardHeader: {
         flexDirection: 'row',
@@ -708,19 +756,19 @@ const styles = StyleSheet.create({
         marginBottom: 8,
     },
     timelineType: {
-        fontSize: 10,
-        fontWeight: '700',
+        fontSize: 11,
+        fontWeight: '800',
         letterSpacing: 1,
     },
     timelineTime: {
-        fontSize: 11,
-        color: '#666',
-        fontWeight: '500',
+        fontSize: 12,
+        color: '#8a8a8a',
+        fontWeight: '600',
     },
     timelineContent: {
-        fontSize: 14,
-        color: '#e5e5e5',
-        lineHeight: 20,
+        fontSize: 16,
+        color: '#f0f0f5',
+        lineHeight: 24,
     },
     timelineCardFooter: {
         marginTop: 12,
@@ -730,56 +778,56 @@ const styles = StyleSheet.create({
     },
     actionRow: {
         flexDirection: 'row',
-        gap: 6, // Tighter gap
-        flex: 1, // Allow taking available space
+        gap: 6,
+        flex: 1,
     },
     actionBtn: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 4,
-        paddingHorizontal: 6, // Reduced padding
-        paddingVertical: 4,
-        borderRadius: 8,
-        backgroundColor: 'rgba(255, 255, 255, 0.03)',
+        gap: 3,
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 10,
+        backgroundColor: 'rgba(255, 255, 255, 0.04)',
         borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.05)',
+        borderColor: 'rgba(255, 255, 255, 0.06)',
     },
     actionBtnActive: {
-        backgroundColor: 'rgba(99, 102, 241, 0.1)',
-        borderColor: 'rgba(99, 102, 241, 0.2)',
+        backgroundColor: 'rgba(99, 102, 241, 0.12)',
+        borderColor: 'rgba(99, 102, 241, 0.22)',
     },
     actionBtnText: {
-        fontSize: 9, // Smaller text
-        color: 'rgba(255, 255, 255, 0.5)',
+        fontSize: 9,
+        color: 'rgba(255, 255, 255, 0.72)',
         fontWeight: '700',
         textTransform: 'uppercase',
-        letterSpacing: 0.5,
+        letterSpacing: 0.4,
     },
     viewInHorizonBtn: {
         flexDirection: 'row',
         alignItems: 'center',
         gap: 4,
-        paddingHorizontal: 8,
-        paddingVertical: 5,
-        borderRadius: 10,
-        backgroundColor: 'rgba(99, 102, 241, 0.15)',
-        marginLeft: 8, // Ensure spacing from actions
+        paddingHorizontal: 10,
+        paddingVertical: 6,
+        borderRadius: 12,
+        backgroundColor: 'rgba(99, 102, 241, 0.16)',
+        marginLeft: 8,
     },
     viewInHorizonText: {
-        fontSize: 10,
-        color: '#6366f1',
+        fontSize: 11,
+        color: '#7c83ff',
         fontWeight: '700',
     },
     hashtagsRow: {
         flexDirection: 'row',
         flexWrap: 'wrap',
-        gap: 6,
-        marginTop: 10,
+        gap: 8,
+        marginTop: 12,
     },
     hashtagText: {
-        fontSize: 11,
-        color: 'rgba(255, 255, 255, 0.4)',
-        fontWeight: '500',
+        fontSize: 12,
+        color: 'rgba(255, 255, 255, 0.55)',
+        fontWeight: '600',
     },
 
     // Empty State

@@ -92,7 +92,9 @@ async function initDatabaseInternal(targetDbName: string): Promise<DB> {
             SCHEMA.externalResources,
             SCHEMA.resourceLinks,
             SCHEMA.dailyDeltas,
-            SCHEMA.feedbackSignals
+            SCHEMA.feedbackSignals,
+            SCHEMA.entities,
+            SCHEMA.entityMentions
         ];
 
         for (const sqlBlock of otherStatements) {

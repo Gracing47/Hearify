@@ -21,6 +21,7 @@ import { useContextStore } from '@/store/contextStore';
 import { toast } from '@/store/toastStore';
 import { analyzeMerge, MergeDecision } from '@/utils/textAnalysis';
 import { cosineSimilarityFull, normalizeVector } from '@/utils/vectorMath';
+import { extractAndStoreEntities } from './entityExtraction';
 
 // ============================================================================
 // CONSTANTS
@@ -164,6 +165,9 @@ export async function saveSnippetWithDedup(input: SaveSnippetInput): Promise<Sav
 
         console.log('[SemanticDedup] Created new snippet:', snippetId);
 
+        // Extract entities in background (non-blocking)
+        extractEntitiesInBackground(snippetId, content);
+
         // Trigger node refresh for Neural Horizon
         useContextStore.getState().triggerNodeRefresh();
 
@@ -257,6 +261,9 @@ async function executeMergeDecision(
             useContextStore.getState().triggerNodeRefresh();
             toast.merged('Memory Updated', 'Expanded existing thought');
 
+            // Extract entities from updated content
+            extractEntitiesInBackground(existingSnippet.id, newContent);
+
             return {
                 success: true,
                 snippetId: existingSnippet.id,
@@ -315,6 +322,9 @@ async function executeMergeDecision(
 
             useContextStore.getState().triggerNodeRefresh();
             toast.success('Memory Saved', 'New related thought stored');
+
+            // Extract entities in background
+            extractEntitiesInBackground(snippetId, newContent);
 
             return {
                 success: true,
@@ -379,6 +389,31 @@ function getTypeLabel(type: 'fact' | 'feeling' | 'goal'): string {
         case 'fact': return '💎 Fact captured';
         case 'feeling': return '💜 Feeling stored';
         case 'goal': return '🎯 Goal remembered';
+    }
+}
+
+/**
+ * Extract entities in background without blocking save operation
+ */
+async function extractEntitiesInBackground(snippetId: number, content: string): Promise<void> {
+    try {
+        const db = getDb();
+        
+        // Get recent snippets for context (last 5)
+        const recentResult = await db.execute(
+            'SELECT content FROM snippets ORDER BY timestamp DESC LIMIT 5'
+        );
+        
+        const context = (recentResult.rows || []).map((row: any) => row.content);
+        
+        // Run extraction (non-blocking)
+        extractAndStoreEntities(snippetId, content, context)
+            .catch(error => {
+                console.error('[SemanticDedup] Entity extraction failed:', error);
+            });
+            
+    } catch (error) {
+        console.error('[SemanticDedup] Failed to prepare entity extraction:', error);
     }
 }
 

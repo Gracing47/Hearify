@@ -18,7 +18,8 @@ import { generateEmbedding } from '@/services/openai';
 import { saveSnippetWithDedup } from '@/services/SemanticDedupService';
 import { useContextStore } from '@/store/contextStore';
 import { useConversationStore } from '@/store/conversation';
-import { LinearGradient } from 'expo-linear-gradient'; // Added import
+import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams } from 'expo-router';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -105,6 +106,8 @@ const ReflectionSuggester = ({ reflections, onSave, onDismiss }: {
     onSave: (r: any, i: number) => void,
     onDismiss: (i: number) => void
 }) => {
+    const [expanded, setExpanded] = useState(false);
+
     if (reflections.length === 0) return null;
 
     return (
@@ -112,44 +115,86 @@ const ReflectionSuggester = ({ reflections, onSave, onDismiss }: {
             entering={FadeInUp.springify()}
             style={styles.reflectionContainer}
         >
-            <View style={styles.reflectionHeader}>
-                <Text style={styles.reflectionTitle}>Möchtest du das festhalten?</Text>
-                <TouchableOpacity onPress={() => reflections.forEach((_, i) => onDismiss(i))}>
-                    <Text style={styles.reflectionDismiss}>Alle ignorieren</Text>
-                </TouchableOpacity>
-            </View>
-            <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.reflectionList}
+            {/* Compact Header - Always Visible */}
+            <TouchableOpacity
+                style={styles.reflectionToggle}
+                onPress={() => setExpanded(!expanded)}
+                activeOpacity={0.7}
             >
-                {reflections.map((ref, i) => (
-                    <Animated.View
-                        key={`${ref.content}-${i}`}
-                        entering={FadeInUp.delay(i * 100).springify()}
-                        layout={LinearTransition}
-                    >
-                        <TouchableOpacity
-                            style={[
-                                styles.reflectionCard,
-                                ref.type === 'goal' && styles.reflectionGoal,
-                                ref.type === 'feeling' && styles.reflectionFeeling,
-                                ref.type === 'fact' && styles.reflectionFact
-                            ]}
-                            onPress={() => onSave(ref, i)}
-                        >
-                            <View style={styles.reflectionIconRow}>
-                                <Text style={styles.reflectionType}>{ref.type.toUpperCase()}</Text>
-                                <TouchableOpacity onPress={() => onDismiss(i)}>
-                                    <Text style={styles.reflectionClose}>✕</Text>
-                                </TouchableOpacity>
-                            </View>
-                            <Text style={styles.reflectionContent} numberOfLines={3}>{ref.content}</Text>
-                            {ref.hashtags && <Text style={styles.reflectionHashtags}>{ref.hashtags}</Text>}
+                <View style={styles.reflectionToggleContent}>
+                    <Ionicons 
+                        name="bookmarks-outline" 
+                        size={16} 
+                        color="rgba(255, 255, 255, 0.6)" 
+                    />
+                    <Text style={styles.reflectionToggleText}>
+                        {reflections.length} {reflections.length === 1 ? 'Gedanke' : 'Gedanken'} zum Festhalten
+                    </Text>
+                    <Ionicons 
+                        name={expanded ? "chevron-up" : "chevron-down"} 
+                        size={16} 
+                        color="rgba(255, 255, 255, 0.4)" 
+                    />
+                </View>
+            </TouchableOpacity>
+
+            {/* Expanded Card List */}
+            {expanded && (
+                <Animated.View
+                    entering={FadeInUp.springify()}
+                    style={styles.reflectionExpandedContent}
+                >
+                    <View style={styles.reflectionHeader}>
+                        <Text style={styles.reflectionTitle}>Tippe zum Speichern</Text>
+                        <TouchableOpacity onPress={() => {
+                            reflections.forEach((_, i) => onDismiss(i));
+                            setExpanded(false);
+                        }}>
+                            <Text style={styles.reflectionDismiss}>Alle ignorieren</Text>
                         </TouchableOpacity>
-                    </Animated.View>
-                ))}
-            </ScrollView>
+                    </View>
+                    <ScrollView
+                        style={styles.reflectionScrollView}
+                        showsVerticalScrollIndicator={false}
+                    >
+                        {reflections.map((ref, i) => (
+                            <Animated.View
+                                key={`${ref.content}-${i}`}
+                                entering={FadeInUp.delay(i * 50).springify()}
+                                layout={LinearTransition}
+                            >
+                                <TouchableOpacity
+                                    style={[
+                                        styles.reflectionCard,
+                                        ref.type === 'goal' && styles.reflectionGoal,
+                                        ref.type === 'feeling' && styles.reflectionFeeling,
+                                        ref.type === 'fact' && styles.reflectionFact
+                                    ]}
+                                    onPress={() => {
+                                        onSave(ref, i);
+                                        if (reflections.length === 1) setExpanded(false);
+                                    }}
+                                >
+                                    <View style={styles.reflectionIconRow}>
+                                        <Text style={styles.reflectionType}>{ref.type.toUpperCase()}</Text>
+                                        <TouchableOpacity 
+                                            onPress={(e) => {
+                                                e.stopPropagation();
+                                                onDismiss(i);
+                                            }}
+                                            hitSlop={8}
+                                        >
+                                            <Text style={styles.reflectionClose}>✕</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                    <Text style={styles.reflectionContent}>{ref.content}</Text>
+                                    {ref.hashtags && <Text style={styles.reflectionHashtags}>{ref.hashtags}</Text>}
+                                </TouchableOpacity>
+                            </Animated.View>
+                        ))}
+                    </ScrollView>
+                </Animated.View>
+            )}
         </Animated.View>
     );
 };
@@ -190,16 +235,24 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     const handleSaveReflection = useCallback(async (reflection: any, index: number) => {
         try {
             Haptics.impactHeavy();
-            await saveSnippetWithDedup({
+            
+            const result = await saveSnippetWithDedup({
                 content: reflection.content,
                 type: reflection.type,
                 sentiment: reflection.sentiment || 'neutral',
                 topic: reflection.topic || 'Reflection',
                 hashtags: reflection.hashtags,
             });
-            // Remove from staging
-            setProposedReflections(prev => prev.filter((_, i) => i !== index));
-            useContextStore.getState().triggerNodeRefresh();
+            
+            if (result.success) {
+                console.log('[Orbit] Snippet saved successfully:', result.snippetId);
+                
+                // Remove from staging
+                setProposedReflections(prev => prev.filter((_, i) => i !== index));
+                
+                // Trigger refresh (already called in saveSnippetWithDedup, but ensuring it fires)
+                useContextStore.getState().triggerNodeRefresh();
+            }
         } catch (e) {
             console.error('[Orbit] Save failed:', e);
         }
@@ -1093,14 +1146,51 @@ const styles = StyleSheet.create({
     sendIcon: {
         fontSize: 18,
     },
-    // 🪞 Mirror Reflection Styles
+    // 🪞 Mirror Reflection Styles (Compact & Collapsible)
     reflectionContainer: {
         position: 'absolute',
-        bottom: 120, // Above staged chips but below suggestions
-        left: 0,
-        right: 0,
-        paddingHorizontal: 20,
+        bottom: 120,
+        left: 20,
+        right: 20,
         zIndex: 110,
+    },
+    reflectionToggle: {
+        backgroundColor: 'rgba(30, 30, 40, 0.95)',
+        borderRadius: 16,
+        paddingVertical: 10,
+        paddingHorizontal: 14,
+        borderWidth: 1,
+        borderColor: 'rgba(99, 102, 241, 0.2)',
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.2,
+        shadowRadius: 8,
+        elevation: 5,
+    },
+    reflectionToggleContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    reflectionToggleText: {
+        flex: 1,
+        fontSize: 12,
+        fontWeight: '600',
+        color: 'rgba(255, 255, 255, 0.7)',
+    },
+    reflectionExpandedContent: {
+        marginTop: 8,
+        backgroundColor: 'rgba(20, 20, 28, 0.98)',
+        borderRadius: 16,
+        padding: 12,
+        borderWidth: 1,
+        borderColor: 'rgba(99, 102, 241, 0.15)',
+        maxHeight: 280,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.3,
+        shadowRadius: 12,
+        elevation: 8,
     },
     reflectionHeader: {
         flexDirection: 'row',
@@ -1121,55 +1211,58 @@ const styles = StyleSheet.create({
         color: '#666',
         fontWeight: '600',
     },
-    reflectionList: {
-        gap: 12,
-        paddingRight: 40,
+    reflectionScrollView: {
+        maxHeight: 220,
     },
     reflectionCard: {
-        width: 240,
-        backgroundColor: 'rgba(30,30,40, 0.85)',
-        borderRadius: 20,
-        padding: 16,
+        backgroundColor: 'rgba(40, 40, 50, 0.7)',
+        borderRadius: 12,
+        padding: 12,
+        marginBottom: 8,
         borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.08)',
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 10 },
-        shadowOpacity: 0.3,
-        shadowRadius: 15,
-        elevation: 10,
+        borderColor: 'rgba(255, 255, 255, 0.06)',
     },
-    reflectionGoal: { borderColor: 'rgba(245, 158, 11, 0.3)' },
-    reflectionFeeling: { borderColor: 'rgba(236, 72, 153, 0.3)' },
-    reflectionFact: { borderColor: 'rgba(6, 182, 212, 0.3)' },
+    reflectionGoal: { 
+        borderLeftWidth: 3,
+        borderLeftColor: '#ffd54f',
+    },
+    reflectionFeeling: { 
+        borderLeftWidth: 3,
+        borderLeftColor: '#ff1f6d',
+    },
+    reflectionFact: { 
+        borderLeftWidth: 3,
+        borderLeftColor: '#08d0ff',
+    },
     reflectionIconRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: 8,
+        marginBottom: 6,
     },
     reflectionType: {
         fontSize: 9,
         fontWeight: '900',
-        color: 'rgba(255, 255, 255, 0.3)',
+        color: 'rgba(255, 255, 255, 0.35)',
         letterSpacing: 1,
     },
     reflectionClose: {
-        fontSize: 14,
-        color: 'rgba(255, 255, 255, 0.2)',
+        fontSize: 16,
+        color: 'rgba(255, 255, 255, 0.3)',
         padding: 4,
     },
     reflectionContent: {
-        fontSize: 14,
-        color: '#f8fafc',
-        lineHeight: 20,
+        fontSize: 13,
+        color: '#f0f0f5',
+        lineHeight: 18,
         fontWeight: '500',
-        marginBottom: 8,
+        marginBottom: 6,
     },
     reflectionHashtags: {
-        fontSize: 11,
-        color: '#6366f1',
-        fontWeight: '700',
-        opacity: 0.8,
+        fontSize: 10,
+        color: '#7c83ff',
+        fontWeight: '600',
+        opacity: 0.7,
     },
     // Adjust ACE positions to avoid overlap
     suggestionsWrapper: {
