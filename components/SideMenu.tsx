@@ -3,18 +3,22 @@
  * Premium glassmorphism drawer for Orbit
  */
 
+import { getAllConversations, type Conversation } from '@/services/ConversationService';
 import { useContextStore } from '@/store/contextStore';
+import { useConversationStore } from '@/store/conversation';
+import * as Haptics from '@/utils/haptics';
 import { BlurView } from 'expo-blur';
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
     Dimensions,
     Modal,
     Platform,
     Pressable,
+    ScrollView,
     StyleSheet,
     Text,
     TouchableOpacity,
-    View,
+    View
 } from 'react-native';
 import Animated, {
     FadeIn,
@@ -25,7 +29,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const MENU_WIDTH = SCREEN_WIDTH * 0.75;
+const MENU_WIDTH = SCREEN_WIDTH * 0.8;
 
 interface MenuItem {
     key: 'orbit' | 'horizon' | 'memory';
@@ -36,18 +40,40 @@ interface MenuItem {
 const menuItems: MenuItem[] = [
     { key: 'orbit', label: 'Orbit', icon: '🏠' },
     { key: 'horizon', label: 'Horizon', icon: '🧠' },
-    { key: 'memory', label: 'Memory', icon: '📋' },
+    { key: 'memory', label: 'Chronicle', icon: '📋' },
 ];
 
 interface SideMenuProps {
     isOpen: boolean;
     onClose: () => void;
+    onResumeSession?: (conversationId: string) => void;
 }
 
-export function SideMenu({ isOpen, onClose }: SideMenuProps) {
+export function SideMenu({ isOpen, onClose, onResumeSession }: SideMenuProps) {
     const insets = useSafeAreaInsets();
     const activeScreen = useContextStore((state) => state.activeScreen);
     const setActiveScreen = useContextStore((state) => state.setActiveScreen);
+    const currentConversationId = useConversationStore((state) => state.currentConversationId);
+    
+    // Sessions state
+    const [recentSessions, setRecentSessions] = useState<Conversation[]>([]);
+    const [sessionsExpanded, setSessionsExpanded] = useState(true);
+
+    // Load recent sessions when menu opens
+    useEffect(() => {
+        if (isOpen) {
+            loadRecentSessions();
+        }
+    }, [isOpen]);
+
+    const loadRecentSessions = async () => {
+        try {
+            const sessions = await getAllConversations(5);
+            setRecentSessions(sessions);
+        } catch (error) {
+            console.error('[SideMenu] Failed to load sessions:', error);
+        }
+    };
 
     const handleNavigation = (screen: MenuItem['key']) => {
         onClose();
@@ -120,6 +146,83 @@ export function SideMenu({ isOpen, onClose }: SideMenuProps) {
                         })}
                     </View>
 
+                    {/* 🕰️ Recent Sessions Section */}
+                    <View style={styles.sessionsSection}>
+                        <TouchableOpacity 
+                            style={styles.sessionsSectionHeader}
+                            onPress={() => {
+                                Haptics.light();
+                                setSessionsExpanded(!sessionsExpanded);
+                            }}
+                            activeOpacity={0.7}
+                        >
+                            <Text style={styles.sessionsSectionTitle}>Recent Sessions</Text>
+                            <Text style={styles.sessionsSectionToggle}>
+                                {sessionsExpanded ? '▼' : '▶'}
+                            </Text>
+                        </TouchableOpacity>
+                        
+                        {sessionsExpanded && (
+                            <ScrollView 
+                                style={styles.sessionsScrollView} 
+                                showsVerticalScrollIndicator={false}
+                            >
+                                {recentSessions.length === 0 ? (
+                                    <Text style={styles.noSessionsText}>
+                                        No conversations yet
+                                    </Text>
+                                ) : (
+                                    recentSessions.map((session) => {
+                                        const isCurrentSession = session.id === currentConversationId;
+                                        const sessionDate = new Date(session.created_at);
+                                        const timeAgo = getRelativeTime(sessionDate);
+                                        
+                                        return (
+                                            <TouchableOpacity
+                                                key={session.id}
+                                                style={[
+                                                    styles.sessionItem,
+                                                    isCurrentSession && styles.sessionItemActive
+                                                ]}
+                                                onPress={() => {
+                                                    Haptics.selection();
+                                                    onClose();
+                                                    if (onResumeSession) {
+                                                        setTimeout(() => {
+                                                            setActiveScreen('orbit');
+                                                            onResumeSession(session.id);
+                                                        }, 200);
+                                                    }
+                                                }}
+                                                activeOpacity={0.7}
+                                            >
+                                                <View style={styles.sessionItemContent}>
+                                                    <Text 
+                                                        style={[
+                                                            styles.sessionTitle,
+                                                            isCurrentSession && styles.sessionTitleActive
+                                                        ]} 
+                                                        numberOfLines={1}
+                                                    >
+                                                        {session.title || 'Untitled Session'}
+                                                    </Text>
+                                                    <Text style={styles.sessionMeta}>
+                                                        {timeAgo} • {session.message_count || 0} messages
+                                                    </Text>
+                                                </View>
+                                                {isCurrentSession && (
+                                                    <View style={styles.currentSessionBadge}>
+                                                        <Text style={styles.currentSessionBadgeText}>●</Text>
+                                                    </View>
+                                                )}
+                                            </TouchableOpacity>
+                                        );
+                                    })
+                                )}
+                            </ScrollView>
+                        )}
+                    </View>
+
                     {/* Footer */}
                     <View style={[styles.menuFooter, { paddingBottom: insets.bottom + 20 }]}>
                         <View style={styles.divider} />
@@ -147,6 +250,23 @@ export function SideMenu({ isOpen, onClose }: SideMenuProps) {
             </View>
         </Modal>
     );
+}
+
+// Helper function for relative time
+function getRelativeTime(date: Date): string {
+    const now = new Date();
+    const diffMs = now.getTime() - date.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays === 1) return 'Yesterday';
+    if (diffDays < 7) return `${diffDays}d ago`;
+    
+    return date.toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
 }
 
 // Burger Icon Component for Header
@@ -249,6 +369,79 @@ const styles = StyleSheet.create({
         color: '#666',
         fontWeight: '500',
     },
+    
+    // 🕰️ Sessions Section
+    sessionsSection: {
+        marginTop: 24,
+        paddingHorizontal: 16,
+        flex: 1,
+    },
+    sessionsSectionHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 8,
+        marginBottom: 8,
+    },
+    sessionsSectionTitle: {
+        fontSize: 13,
+        fontWeight: '700',
+        color: '#666',
+        letterSpacing: 0.5,
+        textTransform: 'uppercase',
+    },
+    sessionsSectionToggle: {
+        fontSize: 10,
+        color: '#666',
+    },
+    sessionsScrollView: {
+        maxHeight: 200,
+    },
+    noSessionsText: {
+        fontSize: 13,
+        color: '#555',
+        fontStyle: 'italic',
+        paddingVertical: 12,
+    },
+    sessionItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 12,
+        paddingHorizontal: 12,
+        marginBottom: 4,
+        borderRadius: 12,
+        backgroundColor: 'rgba(255, 255, 255, 0.03)',
+        borderWidth: 1,
+        borderColor: 'transparent',
+    },
+    sessionItemActive: {
+        backgroundColor: 'rgba(99, 102, 241, 0.12)',
+        borderColor: 'rgba(99, 102, 241, 0.25)',
+    },
+    sessionItemContent: {
+        flex: 1,
+    },
+    sessionTitle: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: '#ccc',
+        marginBottom: 2,
+    },
+    sessionTitleActive: {
+        color: '#fff',
+    },
+    sessionMeta: {
+        fontSize: 11,
+        color: '#666',
+    },
+    currentSessionBadge: {
+        marginLeft: 8,
+    },
+    currentSessionBadgeText: {
+        fontSize: 8,
+        color: '#6366f1',
+    },
+    
     // Burger Button
     burgerButton: {
         width: 44,

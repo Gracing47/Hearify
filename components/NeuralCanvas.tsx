@@ -53,6 +53,7 @@ import { getAllClusters, getAllEdges, getAllSnippets, getDb, isDatabaseReady } f
 import { Snippet } from '../db/schema';
 import { useCameraFlight } from '../hooks/useCameraFlight';
 import { useEcoMode, useEcoModeSharedValue } from '../hooks/useEcoMode';
+import { filterNodesByLens, type FilteredNode } from '../services/LensFilterService';
 import { SpatialEngine } from '../services/SpatialEngine';
 import { useCTC } from '../store/CognitiveTempoController';
 import { useContextStore } from '../store/contextStore';
@@ -134,6 +135,9 @@ export const NeuralCanvas = ({ layoutY, cameraZ: cameraZProp }: NeuralCanvasProp
     const [clusters, setClusters] = useState<any[]>([]);
     const [modalOrigin, setModalOrigin] = useState<{ x: number, y: number } | null>(null);
     const [isFlashcardVisible, setIsFlashcardVisible] = useState(false);
+    
+    // 🔍 GFF LENS FILTERING: Relevance scores for Visual MECE
+    const [nodeRelevanceMap, setNodeRelevanceMap] = useState<Map<number, number>>(new Map());
 
     // 🔍 LOD FONT: System font for text labels
     const font = useMemo(() => matchFont({
@@ -387,6 +391,36 @@ export const NeuralCanvas = ({ layoutY, cameraZ: cameraZProp }: NeuralCanvasProp
         };
         bootstrap();
     }, [nodeRefreshTrigger]);
+
+    // --- 🔍 GFF LENS FILTERING: Apply relevance scores when lens changes ---
+    useEffect(() => {
+        const applyLensFilter = async () => {
+            if (nodes.length === 0) return;
+
+            const filteredNodes = await filterNodesByLens(
+                lensMode as any,
+                activeFocusNodeId
+            );
+
+            // Build relevance map: nodeId -> relevanceScore
+            const relevanceMap = new Map<number, number>();
+            filteredNodes.forEach((fn: FilteredNode) => {
+                relevanceMap.set(fn.id, fn.relevanceScore);
+            });
+
+            // Nodes not in filtered list get 0.1 relevance (dimmed)
+            nodes.forEach((node) => {
+                if (!relevanceMap.has(node.id)) {
+                    relevanceMap.set(node.id, 0.1);
+                }
+            });
+
+            setNodeRelevanceMap(relevanceMap);
+            console.log(`[NeuralCanvas] 🔍 Lens filter applied: ${lensMode}, ${filteredNodes.length}/${nodes.length} nodes visible`);
+        };
+
+        applyLensFilter();
+    }, [lensMode, nodes, activeFocusNodeId]);
 
     // --- 🏠 ORBITAL CONSTELLATION PHYSICS + v2.0 BREATHING ---
     // Note: All contract values inlined to ensure worklet safety
@@ -931,6 +965,7 @@ export const NeuralCanvas = ({ layoutY, cameraZ: cameraZProp }: NeuralCanvasProp
                                     ctcBreathingEnabled={ctcBreathingEnabled}
                                     currentLOD={currentLOD}
                                     isEcoMode={isEcoMode}
+                                    relevanceScore={nodeRelevanceMap.get(node.id) ?? 1.0}
                                 />
                             ))}
 
@@ -1162,7 +1197,8 @@ const NeuralNode = ({
     labelOpacity,
     ctcBreathingEnabled,
     currentLOD,
-    isEcoMode
+    isEcoMode,
+    relevanceScore = 1.0
 }: {
     i: number;
     node: Snippet;
@@ -1182,6 +1218,7 @@ const NeuralNode = ({
     ctcBreathingEnabled: any;
     currentLOD: number;
     isEcoMode: boolean;
+    relevanceScore?: number;
 }) => {
     const colors = TYPE_COLORS[node.type] || TYPE_COLORS.fact;
 
@@ -1308,9 +1345,15 @@ const NeuralNode = ({
     });
 
     const groupOpacity = useDerivedValue(() => {
-        // Opacity is now modulated by 3D distance (Projection) + Filtering
+        // v2.2: GFF Lens Filtering with relevanceScore
+        // Opacity modulated by: 3D distance + Lens filtering + Relevance score
         const distanceOpacity = projection.value.opacity;
-        return isFiltered.value ? distanceOpacity * 0.1 : distanceOpacity;
+        
+        // If using old lens filter logic, apply minimal opacity
+        if (isFiltered.value) return distanceOpacity * 0.1;
+        
+        // Apply relevanceScore from LensFilterService (0.6-1.0)
+        return distanceOpacity * relevanceScore;
     });
 
     // Combined Transform for the Shape Group

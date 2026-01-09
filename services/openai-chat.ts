@@ -110,11 +110,17 @@ export interface ChatResult {
 
 /**
  * Process user input with GPT-4o-mini (fast path)
+ * 
+ * === AMBIENT PERSISTENCE INTEGRATION ===
+ * - Auto-saves messages to conversation_messages table
+ * - Injects session context for resumed conversations
+ * - Triggers title generation after 3rd message
  */
 export async function processWithGPT(
     userInput: string,
     context: string[] = [],
-    history: { role: 'user' | 'assistant', content: string }[] = []
+    history: { role: 'user' | 'assistant', content: string }[] = [],
+    conversationId?: number | null
 ): Promise<ChatResult> {
     const apiKey = await getOpenAIKey();
     if (!apiKey) throw new Error('OpenAI API key not configured');
@@ -122,9 +128,18 @@ export async function processWithGPT(
     const startTime = Date.now();
 
     try {
+        // === SESSION CONTEXT INJECTION ===
+        let sessionContext = '';
+        if (conversationId) {
+            const { buildSessionContext } = await import('./SessionRestorationService');
+            sessionContext = await buildSessionContext(conversationId);
+        }
+
         const contextStr = context.length > 0
             ? `\n\n[NEURAL CONTEXT]\n${context.join('\n')}`
             : '';
+
+        const fullContext = sessionContext + contextStr;
 
         const recentHistory = history.slice(-10);
 
@@ -133,6 +148,24 @@ export async function processWithGPT(
             weekday: 'long', year: 'numeric', month: 'long',
             day: 'numeric', hour: '2-digit', minute: '2-digit'
         })}`;
+
+        // === SAVE USER MESSAGE TO DB ===
+        if (conversationId) {
+            const { addMessage, getMessageCount, generateConversationTitle } = await import('./ConversationService');
+            
+            await addMessage(conversationId, {
+                role: 'user',
+                content: userInput,
+            });
+
+            // Trigger title generation after 3rd message
+            const messageCount = await getMessageCount(conversationId);
+            if (messageCount === 3) {
+                generateConversationTitle(conversationId).catch((err) =>
+                    console.warn('[Chat] Title generation failed:', err)
+                );
+            }
+        }
 
         const response = await fetch(API_URL, {
             method: 'POST',
@@ -143,9 +176,9 @@ export async function processWithGPT(
             body: JSON.stringify({
                 model: MODEL,
                 messages: [
-                    { role: 'system', content: HEARIFY_SYSTEM_PROMPT + timePrompt },
+                    { role: 'system', content: HEARIFY_SYSTEM_PROMPT + timePrompt + (fullContext ? '\n\n' + fullContext : '') },
                     ...recentHistory,
-                    { role: 'user', content: userInput + contextStr }
+                    { role: 'user', content: userInput }
                 ],
                 temperature: 0.7,
                 max_tokens: 800,
@@ -162,6 +195,16 @@ export async function processWithGPT(
 
         const elapsed = Date.now() - startTime;
         console.log(`[GPT-4o-mini] Response in ${elapsed}ms`);
+
+        // === SAVE ASSISTANT MESSAGE TO DB ===
+        if (conversationId) {
+            const { addMessage } = await import('./ConversationService');
+            
+            await addMessage(conversationId, {
+                role: 'assistant',
+                content: rawContent,
+            });
+        }
 
         // Extract structured data
         const { cleanResponse, snippets } = extractStructuredData(rawContent);

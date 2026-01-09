@@ -94,7 +94,9 @@ async function initDatabaseInternal(targetDbName: string): Promise<DB> {
             SCHEMA.dailyDeltas,
             SCHEMA.feedbackSignals,
             SCHEMA.entities,
-            SCHEMA.entityMentions
+            SCHEMA.entityMentions,
+            SCHEMA.conversations,
+            SCHEMA.conversationMessages
         ];
 
         for (const sqlBlock of otherStatements) {
@@ -180,16 +182,17 @@ export async function insertSnippet(
     x: number = (Math.random() * 400) - 200,
     y: number = (Math.random() * 400) - 200,
     reasoning?: string,
-    hashtags?: string
+    hashtags?: string,
+    conversationId?: number | null // 🆕 AMBIENT PERSISTENCE
 ): Promise<number> {
     const database = getDb();
     const timestamp = Date.now();
 
     try {
-        // 1. Insert into main table with sentiment and topic
+        // 1. Insert into main table with sentiment, topic, and conversation_id
         const result = await database.execute(
-            'INSERT INTO snippets (content, type, sentiment, topic, hashtags, timestamp, x, y, reasoning) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-            [content, type, sentiment, topic, hashtags ?? null, timestamp, x, y, reasoning ?? null]
+            'INSERT INTO snippets (content, type, sentiment, topic, hashtags, timestamp, x, y, reasoning, conversation_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [content, type, sentiment, topic, hashtags ?? null, timestamp, x, y, reasoning ?? null, conversationId ?? null]
         );
 
         const snippetId = result.insertId!;

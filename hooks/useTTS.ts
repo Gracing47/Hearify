@@ -2,8 +2,11 @@
  * TTS (Text-to-Speech) Hook
  * 
  * Uses OpenAI TTS-1-HD for high-quality voice generation
- * Generates complete audio file and plays it smoothly
- * speak() returns a Promise that resolves when audio finishes
+ * 
+ * Features:
+ * - speak(): Full text generation (legacy)
+ * - speakStreaming(): Hybrid sentence-by-sentence streaming (Q1A, Q2A)
+ *   → First sentence plays in <500ms, rest buffers in parallel
  */
 
 import { useAudioPlayer, useAudioPlayerStatus } from 'expo-audio';
@@ -115,6 +118,115 @@ export function useTTS() {
         });
     }, [player, intensity]);
 
+    /**
+     * 🚀 Streaming TTS with Hybrid Approach (Q1A, Q2A)
+     * 
+     * - First sentence generates and plays immediately (<500ms)
+     * - Remaining sentences buffer in parallel
+     * - Seamless queue playback
+     */
+    const speakStreaming = useCallback(async (
+        text: string, 
+        onPlaybackStart?: () => void
+    ): Promise<void> => {
+        return new Promise(async (resolve, reject) => {
+            try {
+                setState({ isGenerating: true, isSpeaking: false, error: null });
+                intensity.value = withTiming(0.3, { duration: 200 });
+
+                player.pause();
+
+                // Audio chunks queue
+                const audioQueue: AudioChunk[] = [];
+                let currentChunkIndex = 0;
+                let isPlayingQueue = false;
+                let allChunksReady = false;
+
+                // Function to play next chunk in queue
+                const playNextChunk = () => {
+                    if (currentChunkIndex < audioQueue.length && audioQueue[currentChunkIndex]) {
+                        const chunk = audioQueue[currentChunkIndex];
+                        console.log(`[TTS-Stream] Playing chunk ${currentChunkIndex + 1}/${audioQueue.length}`);
+                        player.replace({ uri: chunk.uri });
+                        player.play();
+                        isPlayingQueue = true;
+                    } else if (allChunksReady && currentChunkIndex >= audioQueue.length) {
+                        // All chunks played
+                        console.log('[TTS-Stream] Queue complete');
+                        setState(prev => ({ ...prev, isSpeaking: false }));
+                        intensity.value = withTiming(0, { duration: 300 });
+                        resolve();
+                    }
+                };
+
+                // Listen for audio completion to play next chunk
+                const checkCompletion = setInterval(() => {
+                    if (status.didJustFinish && isPlayingQueue) {
+                        currentChunkIndex++;
+                        isPlayingQueue = false;
+                        playNextChunk();
+                    }
+                }, 50);
+
+                // Generate TTS with priority streaming
+                console.log('[TTS-Stream] Starting priority generation...');
+                const startTime = Date.now();
+
+                await generatePriorityStreamingTTS(text, {
+                    onFirstChunkReady: (uri) => {
+                        const latency = Date.now() - startTime;
+                        console.log(`[TTS-Stream] 🚀 First chunk ready in ${latency}ms - playing immediately!`);
+                        
+                        audioQueue[0] = { sentence: '', uri };
+                        setState(prev => ({ ...prev, isGenerating: false, isSpeaking: true }));
+                        intensity.value = withTiming(0.8, { duration: 200 });
+                        
+                        if (onPlaybackStart) {
+                            onPlaybackStart();
+                        }
+                        
+                        playNextChunk();
+                    },
+                    onChunkReady: (uri, index) => {
+                        audioQueue[index] = { sentence: '', uri };
+                        // If we're waiting for this chunk and not currently playing, start
+                        if (!isPlayingQueue && currentChunkIndex === index) {
+                            playNextChunk();
+                        }
+                    },
+                    onComplete: () => {
+                        allChunksReady = true;
+                        console.log(`[TTS-Stream] All ${audioQueue.length} chunks generated`);
+                        
+                        // If nothing is playing, check if we should start
+                        if (!isPlayingQueue) {
+                            playNextChunk();
+                        }
+                    },
+                    onError: (error) => {
+                        clearInterval(checkCompletion);
+                        reject(error);
+                    }
+                });
+
+                // Cleanup after timeout (safety)
+                setTimeout(() => {
+                    clearInterval(checkCompletion);
+                }, 120000); // 2 minute max
+
+            } catch (error) {
+                console.error('[TTS-Stream] Error:', error);
+                setState({
+                    isGenerating: false,
+                    isSpeaking: false,
+                    error: error instanceof Error ? error.message : 'TTS streaming failed',
+                });
+                intensity.value = 0;
+                reject(error);
+            }
+        });
+    }, [player, intensity, status.didJustFinish]);
+
     const stop = useCallback(() => {
         player.pause();
         intensity.value = withTiming(0, { duration: 200 });
@@ -131,6 +243,7 @@ export function useTTS() {
         state,
         intensity,
         speak,
+        speakStreaming,
         stop,
     };
 }

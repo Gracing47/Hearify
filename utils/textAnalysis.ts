@@ -4,7 +4,10 @@
  * Features:
  * - Levenshtein Distance (Edit Distance) for textual diff quantification
  * - Jaccard Similarity for tag set comparison
- * - Smart Merge Decision Matrix
+ * - Smart Merge Decision Matrix (Q5B/Q6B Strategy)
+ * 
+ * Q5B (Threshold 0.75+): Moderate - catches conceptually related thoughts
+ * Q6B (Merge Strategy): Longer/richer content wins, metadata aggregated
  */
 
 // ============================================================================
@@ -132,10 +135,12 @@ interface MergeAnalysisInput {
 }
 
 /**
- * Smart Merge Decision Matrix
+ * Smart Merge Decision Matrix (Q5B/Q6B Strategy)
  * 
  * Analyzes the relationship between old and new content
  * and recommends the optimal merge strategy.
+ * 
+ * Q6B Strategy: Longer/richer content wins, metadata aggregated
  */
 export const analyzeMerge = ({
     oldText,
@@ -150,9 +155,15 @@ export const analyzeMerge = ({
     const tagJaccard = jaccardSimilarity(oldTags, newTags);
     const lengthRatio = newText.length / (oldText.length || 1);
     const hasNewTags = newTags.some(t => !oldTags.includes(t));
+    
+    // Q6B: Count "richness" metrics
+    const newWordCount = extractWords(newText).length;
+    const oldWordCount = extractWords(oldText).length;
+    const newHasMoreContent = newWordCount > oldWordCount * 1.2; // 20% more words
+    const oldHasMoreContent = oldWordCount > newWordCount * 1.2;
 
     // ====================================================================
-    // DECISION TREE
+    // DECISION TREE (Q5B/Q6B Optimized)
     // ====================================================================
 
     // Case 1: Exact duplicate (same text, same meaning)
@@ -162,76 +173,89 @@ export const analyzeMerge = ({
             return {
                 action: 'MERGE_TAGS',
                 confidence: 0.99,
-                reason: 'Exact duplicate with new tags',
+                reason: 'Exakt ähnlich - Tags zusammengeführt',
                 suggestedTags: [...new Set([...oldTags, ...newTags])],
             };
         }
         return {
             action: 'KEEP_OLD',
             confidence: 0.99,
-            reason: 'Exact semantic and textual duplicate',
+            reason: 'Identischer Gedanke bereits gespeichert',
         };
     }
 
-    // Case 2: Same meaning, but new text is significantly longer (expansion)
-    if (semanticSimilarity > 0.85 && lengthRatio > 1.5) {
-        return {
-            action: 'REPLACE',
-            confidence: 0.9,
-            reason: 'New text expands on the same topic',
-            suggestedContent: newText,
-            suggestedTags: [...new Set([...oldTags, ...newTags])],
-        };
-    }
-
-    // Case 3: Same meaning, new text is shorter (summary vs detail)
-    if (semanticSimilarity > 0.88 && lengthRatio < 0.6) {
-        return {
-            action: 'KEEP_OLD',
-            confidence: 0.85,
-            reason: 'Existing text has more detail',
-        };
-    }
-
-    // Case 4: High semantic match, moderate text difference
-    if (semanticSimilarity > 0.85) {
-        // Check if new text contains Markdown formatting
-        const hasMarkdown = /[*_#\[\]`]/.test(newText);
-        const oldHasMarkdown = /[*_#\[\]`]/.test(oldText);
-
-        if (hasMarkdown && !oldHasMarkdown) {
+    // Case 2: Near-duplicate (>0.92) - Q6B: Longer wins
+    if (semanticSimilarity > 0.92) {
+        if (newHasMoreContent) {
             return {
                 action: 'REPLACE',
-                confidence: 0.85,
-                reason: 'New text has better formatting',
+                confidence: 0.95,
+                reason: 'Neuer Text erweitert bestehenden Gedanken',
                 suggestedContent: newText,
                 suggestedTags: [...new Set([...oldTags, ...newTags])],
             };
         }
-
-        // Default: merge tags only
         return {
             action: 'MERGE_TAGS',
-            confidence: 0.8,
-            reason: 'Similar content, merging metadata',
+            confidence: 0.92,
+            reason: 'Ähnlicher Inhalt - Metadaten aktualisiert',
             suggestedTags: [...new Set([...oldTags, ...newTags])],
         };
     }
 
-    // Case 5: Moderate semantic match (related but different)
-    if (semanticSimilarity > 0.70) {
+    // Case 3: High similarity (>0.85) - Q6B: Richer content wins
+    if (semanticSimilarity > 0.85) {
+        if (newHasMoreContent || lengthRatio > 1.3) {
+            return {
+                action: 'REPLACE',
+                confidence: 0.9,
+                reason: 'Reichhaltigere Version des Gedankens',
+                suggestedContent: newText,
+                suggestedTags: [...new Set([...oldTags, ...newTags])],
+            };
+        }
+        if (oldHasMoreContent) {
+            return {
+                action: 'MERGE_TAGS',
+                confidence: 0.85,
+                reason: 'Bestehender Text detaillierter - Tags ergänzt',
+                suggestedTags: [...new Set([...oldTags, ...newTags])],
+            };
+        }
+        // Similar length - merge tags
         return {
-            action: 'CREATE_NEW',
-            confidence: 0.7,
-            reason: 'Related but distinct thoughts',
+            action: 'MERGE_TAGS',
+            confidence: 0.8,
+            reason: 'Gleiche Tiefe - Metadaten zusammengeführt',
+            suggestedTags: [...new Set([...oldTags, ...newTags])],
         };
     }
 
-    // Case 6: Low similarity - definitely different
+    // Case 4: Conceptual match (0.75-0.85) - Q5B Threshold
+    if (semanticSimilarity > 0.75) {
+        // Q6B: Create merge with richer content as base
+        if (newHasMoreContent) {
+            return {
+                action: 'MERGE_CONTENT',
+                confidence: 0.75,
+                reason: 'Verwandter Gedanke - erweiterte Version gespeichert',
+                suggestedContent: newText,
+                suggestedTags: [...new Set([...oldTags, ...newTags])],
+            };
+        }
+        // Link them semantically but keep both
+        return {
+            action: 'CREATE_NEW',
+            confidence: 0.7,
+            reason: 'Verwandter aber eigenständiger Gedanke',
+        };
+    }
+
+    // Case 5: Low similarity - definitely different
     return {
         action: 'CREATE_NEW',
         confidence: 0.95,
-        reason: 'Unique new thought',
+        reason: 'Einzigartiger neuer Gedanke',
     };
 };
 

@@ -231,22 +231,21 @@ export const PanoramaScreen = () => {
 
     return (
         <View style={styles.container}>
-            {/* Main Content (NOT wrapped in GestureDetector) */}
-            {/* pointerEvents='box-none' allows touches to pass through to children */}
-            <Animated.View style={[styles.track, foregroundStyle]} pointerEvents="box-none">
+            {/* Main Content */}
+            <Animated.View style={[styles.track, foregroundStyle]}>
 
                 {/* 👈 ZONE 1: HORIZON */}
-                <Animated.View style={[styles.screen, horizonStyle]} pointerEvents="box-none">
+                <Animated.View style={[styles.screen, horizonStyle]}>
                     <HorizonScreen layoutY={translateX} cameraZ={cameraZ} />
                 </Animated.View>
 
                 {/* ⏺️ ZONE 2: ORBIT */}
-                <Animated.View style={[styles.screen, orbitStyle]} pointerEvents="box-none">
+                <Animated.View style={[styles.screen, orbitStyle]}>
                     <OrbitScreen layoutY={translateX} />
                 </Animated.View>
 
                 {/* 👉 ZONE 3: CHRONICLE */}
-                <Animated.View style={[styles.screen, chronicleStyle]} pointerEvents="box-none">
+                <Animated.View style={[styles.screen, chronicleStyle]}>
                     <MemoryScreen />
                 </Animated.View>
 
@@ -305,7 +304,6 @@ const styles = StyleSheet.create({
         top: 0,
         width: GESTURE_CONFIG.edgeWidth,
         height: SCREEN_HEIGHT,
-        zIndex: 50,
     },
     gaugeContainer: {
         position: 'absolute',

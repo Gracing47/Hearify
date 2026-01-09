@@ -16,7 +16,7 @@
 import { getDb } from '@/db';
 import { Snippet } from '@/db/schema';
 
-export type LensMode = 'ALL' | 'STRATEGY' | 'FEELINGS' | 'FACTS' | 'RECENT';
+export type LensMode = 'EXPLORE' | 'LEARN' | 'STRATEGY' | 'REFLECT';
 
 export interface FilteredNode extends Snippet {
   relevanceScore: number; // 0-1, for visual weight/opacity
@@ -33,8 +33,8 @@ export async function filterNodesByLens(
 ): Promise<FilteredNode[]> {
   const db = getDb();
 
-  // ALL mode: No filtering
-  if (lensMode === 'ALL') {
+  // EXPLORE mode: No filtering (show all)
+  if (lensMode === 'EXPLORE') {
     const result = await db.execute('SELECT * FROM snippets ORDER BY timestamp DESC');
     return (result.rows || []).map((node: any) => ({
       ...node,
@@ -43,18 +43,9 @@ export async function filterNodesByLens(
     }));
   }
 
-  // RECENT mode: Last 24 hours
-  if (lensMode === 'RECENT') {
-    const dayAgo = Date.now() - 86400000;
-    const result = await db.execute(
-      'SELECT * FROM snippets WHERE timestamp >= ? ORDER BY timestamp DESC',
-      [dayAgo]
-    );
-    return (result.rows || []).map((node: any) => ({
-      ...node,
-      relevanceScore: 1.0,
-      connectionReason: 'Recent activity'
-    }));
+  // LEARN mode: Facts + connected goals (learning context)
+  if (lensMode === 'LEARN') {
+    return filterFactsLens();
   }
 
   // STRATEGY mode: Goals + connected Facts/Feelings
@@ -62,17 +53,12 @@ export async function filterNodesByLens(
     return filterStrategyLens(focusNodeId);
   }
 
-  // FEELINGS mode: Show all feelings + connected goals
-  if (lensMode === 'FEELINGS') {
+  // REFLECT mode: Feelings + connected goals (emotional context)
+  if (lensMode === 'REFLECT') {
     return filterFeelingsLens();
   }
 
-  // FACTS mode: Show all facts + connected goals
-  if (lensMode === 'FACTS') {
-    return filterFactsLens();
-  }
-
-  // Default: return all
+  // Default: return all (EXPLORE fallback)
   const result = await db.execute('SELECT * FROM snippets');
   return (result.rows || []).map((node: any) => ({
     ...node,

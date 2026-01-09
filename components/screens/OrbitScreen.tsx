@@ -17,7 +17,7 @@ import { transcribeAudio } from '@/services/groq';
 import { generateEmbedding } from '@/services/openai';
 import { saveSnippetWithDedup } from '@/services/SemanticDedupService';
 import { useContextStore } from '@/store/contextStore';
-import { useConversationStore } from '@/store/conversation';
+import { PROCESSING_STATE_LABELS, useConversationStore } from '@/store/conversation';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useLocalSearchParams } from 'expo-router';
@@ -27,6 +27,8 @@ import {
     Alert,
     Dimensions,
     Keyboard,
+    KeyboardAvoidingView,
+    Platform,
     Pressable,
     StyleSheet,
     Text,
@@ -41,6 +43,7 @@ import Animated, {
     FadeOut,
     interpolate,
     LinearTransition,
+    runOnJS,
     SharedValue,
     useAnimatedStyle,
     useSharedValue,
@@ -52,6 +55,7 @@ import Animated, {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { processWithGPT } from '@/services/openai-chat';
+import { getSuggestionColor, getSuggestionIcon, getSurfaceSuggestions, type SurfaceSuggestion } from '@/services/SurfaceSuggestionService';
 import * as Haptics from '@/utils/haptics';
 
 // 🧠 Sprint 1.1: ACE Integration
@@ -59,6 +63,27 @@ import { useEcoMode } from '@/hooks/useEcoMode';
 import { usePredictions } from '@/hooks/usePredictions';
 import { ace } from '@/services/AmbientConnectionEngine';
 import { usePredictionStore, type Prediction } from '@/store/predictionStore';
+
+// 📐 Card dimensions for iPhone-style carousel
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const CARD_WIDTH = SCREEN_WIDTH - 64; // Full-width cards with margin
+
+// 🕐 Helper for relative time display
+function formatTimeAgo(timestamp: number): string {
+    const now = Date.now();
+    const diffMs = now - timestamp;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMins / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffMins < 1) return 'Gerade eben';
+    if (diffMins < 60) return `vor ${diffMins}m`;
+    if (diffHours < 24) return `vor ${diffHours}h`;
+    if (diffDays === 1) return 'Gestern';
+    if (diffDays < 7) return `vor ${diffDays} Tagen`;
+    if (diffDays < 30) return `vor ${Math.floor(diffDays / 7)} Wochen`;
+    return `vor ${Math.floor(diffDays / 30)} Monaten`;
+}
 
 type AppState = 'idle' | 'listening' | 'processing' | 'speaking';
 
@@ -206,6 +231,9 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     const [dailyDelta, setDailyDelta] = useState<DailyDelta | null>(null);
     const [deltaShown, setDeltaShown] = useState(true);
     const [deepThinking, setDeepThinking] = useState(false);
+    
+    // 🎹 Animated keyboard height for smooth transitions
+    const keyboardHeightAnim = useSharedValue(0);
 
     // 🆕 Sprint 1.1: Text Input & ACE State
     const [textInput, setTextInput] = useState('');
@@ -214,6 +242,32 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     const textInputRef = React.useRef<TextInput>(null);
     const { reflect } = useLocalSearchParams<{ reflect?: string }>();
     const lastReflectedContent = useRef<string | null>(null);
+
+    // 🌊 Surface Suggestions State
+    const [surfaceSuggestions, setSurfaceSuggestions] = useState<SurfaceSuggestion[]>([]);
+    const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
+    const surfaceCardsOpacity = useSharedValue(1);
+
+    // Helper to reset opacity after fade
+    const resetSurfaceCardsOpacity = useCallback(() => {
+        surfaceCardsOpacity.value = 1;
+    }, []);
+
+    // Helper to clear suggestions  
+    const clearSurfaceSuggestions = useCallback(() => {
+        setSurfaceSuggestions([]);
+    }, []);
+
+    // 🃏 Smooth fade-out for surface cards
+    const dismissSurfaceCards = useCallback(() => {
+        if (surfaceSuggestions.length === 0) return; // Nothing to dismiss
+        surfaceCardsOpacity.value = withTiming(0, { duration: 200 }, (finished) => {
+            if (finished) {
+                runOnJS(clearSurfaceSuggestions)();
+                runOnJS(resetSurfaceCardsOpacity)();
+            }
+        });
+    }, [surfaceSuggestions.length, clearSurfaceSuggestions, resetSurfaceCardsOpacity]);
 
     // 🧠 Handle incoming "Reflect" triggers from Chronicle
     useEffect(() => {
@@ -236,12 +290,16 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
         try {
             Haptics.impactHeavy();
             
+            // === AMBIENT PERSISTENCE: Link snippet to current conversation ===
+            const conversationId = useConversationStore.getState().currentConversationId;
+            
             const result = await saveSnippetWithDedup({
                 content: reflection.content,
                 type: reflection.type,
                 sentiment: reflection.sentiment || 'neutral',
                 topic: reflection.topic || 'Reflection',
                 hashtags: reflection.hashtags,
+                conversationId, // 🆕 Link to session
             });
             
             if (result.success) {
@@ -288,6 +346,11 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     const isReasoning = useConversationStore(state => state.isReasoning);
     const isEmbedding = useConversationStore(state => state.isEmbedding);
     const isSpeaking = useConversationStore(state => state.isSpeaking);
+    const resumeSession = useConversationStore(state => state.resumeSession);
+    
+    // 🎯 Granular Processing State (Q3C)
+    const processingState = useConversationStore(state => state.processingState);
+    const setProcessingState = useConversationStore(state => state.setProcessingState);
 
     // 👻 Ghost Mode (Sprint 2.1)
     const isGhostMode = useContextStore(state => state.isGhostMode);
@@ -344,6 +407,60 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
 
     const insets = useSafeAreaInsets();
     const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+    // 🎹 Keyboard listener with smooth animated transitions
+    useEffect(() => {
+        const keyboardWillShow = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+            (e) => {
+                keyboardHeightAnim.value = withTiming(e.endCoordinates.height, { duration: 250 });
+            }
+        );
+        const keyboardWillHide = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+            () => {
+                keyboardHeightAnim.value = withTiming(0, { duration: 200 });
+            }
+        );
+
+        return () => {
+            keyboardWillShow.remove();
+            keyboardWillHide.remove();
+        };
+    }, []);
+
+    // 🎨 Animated styles for smooth keyboard transitions
+    const inputBarAnimatedStyle = useAnimatedStyle(() => {
+        const bottomOffset = keyboardHeightAnim.value > 0 
+            ? keyboardHeightAnim.value + 60 
+            : insets.bottom + 20;
+        return {
+            bottom: bottomOffset,
+        };
+    });
+
+    const welcomeContainerAnimatedStyle = useAnimatedStyle(() => {
+        return {
+            transform: [{ translateY: withTiming(keyboardHeightAnim.value > 0 ? -keyboardHeightAnim.value * 0.35 : 0, { duration: 250 }) }],
+        };
+    });
+
+    const ghostSuggestionsAnimatedStyle = useAnimatedStyle(() => {
+        const bottomOffset = keyboardHeightAnim.value > 0 
+            ? keyboardHeightAnim.value + 130 
+            : insets.bottom + 90;
+        return {
+            bottom: bottomOffset,
+            opacity: withTiming(textInput.length > 0 ? 1 : 0, { duration: 200 }),
+        };
+    });
+
+    // 🃏 Animated style for surface cards fade-out
+    const surfaceCardsAnimatedStyle = useAnimatedStyle(() => {
+        return {
+            opacity: surfaceCardsOpacity.value,
+        };
+    });
 
     // 🚀 SINGULARITY: The Orb reacts to horizontal swipe
     // Triptych: -2W = Chronicle, -W = Orbit (Home), 0 = Horizon
@@ -403,6 +520,26 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
             }
         };
         fetchDelta();
+    }, []);
+
+    // 🌊 Load Surface Suggestions
+    useEffect(() => {
+        const loadSuggestions = async () => {
+            try {
+                const suggestions = await getSurfaceSuggestions(3);
+                setSurfaceSuggestions(suggestions);
+                console.log('[Orbit] Loaded', suggestions.length, 'surface suggestions');
+                suggestions.forEach((s, i) => {
+                    console.log(`[Orbit] Suggestion ${i}:`, s.type, s.reason, 'content:', s.snippet?.content?.slice(0, 50));
+                });
+            } catch (e) {
+                console.debug('[Orbit] Surface suggestions skipped:', e);
+            }
+        };
+        
+        // Load after a short delay to not block initial render
+        const timer = setTimeout(loadSuggestions, 1500);
+        return () => clearTimeout(timer);
     }, []);
 
     // =========================================================================
@@ -471,6 +608,7 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
         try {
             Haptics.thinking();
             setAppState('processing');
+            setProcessingState('retrieving'); // 🎯 Q3C: "Durchsuche Erinnerungen..."
 
             addUserMessage(userText);
 
@@ -499,6 +637,15 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                 content: m.content
             }));
 
+            // === AMBIENT PERSISTENCE: Get or create conversation session ===
+            let conversationId = useConversationStore.getState().currentConversationId;
+            if (!conversationId) {
+                conversationId = await useConversationStore.getState().startNewSession();
+                console.log('[Orbit] Started new session:', conversationId);
+            }
+
+            setProcessingState('reasoning'); // 🎯 Q3C: "Denke nach..."
+            
             if (deepThinking) {
                 setReasoning(true);
                 const result = await processWithReasoning(userText, context, history);
@@ -507,13 +654,14 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                 snippets = result.snippets;
             } else {
                 setReasoning(true);
-                const result = await processWithGPT(userText, context, history);
+                const result = await processWithGPT(userText, context, history, conversationId);
                 finalResponse = result.response;
                 snippets = result.snippets;
             }
 
             addAIResponse(finalResponse, finalReasoning);
             setReasoning(false);
+            setProcessingState('generating'); // 🎯 Q3C: "Formuliere Antwort..."
 
             // Save snippets with staged edges
             setEmbedding(true);
@@ -533,8 +681,10 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
 
             setAppState('speaking');
             setSpeaking(true);
+            setProcessingState('speaking'); // 🎯 Q3C: "Spreche..."
             try {
-                await tts.speak(finalResponse, () => {
+                // 🚀 Hybrid TTS Streaming: First sentence plays in <500ms
+                await tts.speakStreaming(finalResponse, () => {
                     Haptics.speaking();
                 });
             } catch (ttsError) {
@@ -543,6 +693,7 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
 
             setSpeaking(false);
             setAppState('idle');
+            setProcessingState('idle'); // 🎯 Q3C: Back to idle
 
         } catch (error) {
             console.error('[Neural Loop] Failed:', error);
@@ -552,10 +703,11 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
             setEmbedding(false);
             setSpeaking(false);
             setAppState('idle');
+            setProcessingState('idle');
             Haptics.error();
             Alert.alert('Error', 'Neural loop failed.');
         }
-    }, [deepThinking, messages, tts, addAIResponse, addUserMessage, setTranscribing, setEmbedding, setReasoning, setSpeaking, setError]);
+    }, [deepThinking, messages, tts, addAIResponse, addUserMessage, setTranscribing, setEmbedding, setReasoning, setSpeaking, setError, setProcessingState]);
 
     // Handle sending text message (similar to voice flow)
     const handleSendText = useCallback(async () => {
@@ -648,16 +800,19 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
 
     return (
         <View style={styles.container}>
-            {/* 🔦 Semantic Edge Glow */}
-            <AnimatedLinearGradient
-                colors={['#c084fc', 'transparent']}
-                start={{ x: 0, y: 0.5 }}
-                end={{ x: 1, y: 0.5 }}
-                style={[styles.leftEdgeGlow, edgeGlowStyle]}
-                pointerEvents="none"
-            />
             <View style={[styles.safeArea, { paddingTop: insets.top }]}>
-                <SideMenu isOpen={menuOpen} onClose={() => setMenuOpen(false)} />
+                <SideMenu 
+                    isOpen={menuOpen} 
+                    onClose={() => setMenuOpen(false)} 
+                    onResumeSession={async (conversationId: string) => {
+                        try {
+                            await resumeSession(parseInt(conversationId, 10));
+                            Haptics.impactHeavy();
+                        } catch (error) {
+                            console.error('[Orbit] Failed to resume session:', error);
+                        }
+                    }}
+                />
 
                 <View style={styles.header}>
                     <BurgerMenuButton onPress={() => setMenuOpen(true)} />
@@ -684,9 +839,103 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                 </View>
 
                 {messages.length === 0 ? (
-                    <View style={styles.welcomeContainer}>
+                    <Animated.View 
+                        style={[
+                            styles.welcomeContainer,
+                            welcomeContainerAnimatedStyle
+                        ]}
+                    >
                         {dailyDelta && deltaShown && (
                             <DeltaCard delta={dailyDelta} onDismiss={() => setDeltaShown(false)} />
+                        )}
+
+                        {/* 🌊 Surface Suggestions - iPhone-style swipeable cards */}
+                        {surfaceSuggestions.length > 0 && !dailyDelta && (
+                            <Animated.View 
+                                entering={FadeInUp.delay(300)} 
+                                style={[styles.surfaceCarouselWrapper, surfaceCardsAnimatedStyle]}
+                            >
+                                <ScrollView
+                                    horizontal
+                                    pagingEnabled={false}
+                                    showsHorizontalScrollIndicator={false}
+                                    decelerationRate="fast"
+                                    snapToInterval={CARD_WIDTH + 16}
+                                    snapToAlignment="start"
+                                    contentContainerStyle={styles.surfaceCarouselContent}
+                                    onScroll={(e) => {
+                                        const index = Math.round(e.nativeEvent.contentOffset.x / (CARD_WIDTH + 16));
+                                        if (index !== activeSuggestionIndex && index >= 0 && index < surfaceSuggestions.length) {
+                                            setActiveSuggestionIndex(index);
+                                        }
+                                    }}
+                                    scrollEventThrottle={16}
+                                >
+                                    {surfaceSuggestions.map((suggestion, index) => (
+                                        <Animated.View
+                                            key={suggestion.id}
+                                            entering={FadeInUp.delay(100 * index)}
+                                            style={[
+                                                styles.surfaceCard,
+                                                { 
+                                                    borderColor: `${getSuggestionColor(suggestion.type)}40`,
+                                                    width: CARD_WIDTH,
+                                                }
+                                            ]}
+                                        >
+                                            <TouchableOpacity
+                                                style={styles.surfaceCardInner}
+                                                onPress={() => {
+                                                    Haptics.selection();
+                                                    dismissSurfaceCards(); // Smooth fade-out
+                                                    setTimeout(() => {
+                                                        setTextInput(suggestion.promptHint);
+                                                        textInputRef.current?.focus();
+                                                    }, 220); // Wait for fade-out
+                                                }}
+                                                activeOpacity={0.8}
+                                            >
+                                                <View style={styles.surfaceCardHeader}>
+                                                    <View style={[styles.surfaceCardIcon, { backgroundColor: `${getSuggestionColor(suggestion.type)}20` }]}>
+                                                        <Ionicons
+                                                            name={getSuggestionIcon(suggestion.type) as any}
+                                                            size={20}
+                                                            color={getSuggestionColor(suggestion.type)}
+                                                        />
+                                                    </View>
+                                                    <View style={styles.surfaceCardHeaderText}>
+                                                        <Text style={[styles.surfaceCardReason, { color: getSuggestionColor(suggestion.type) }]}>
+                                                            {suggestion.reason}
+                                                        </Text>
+                                                        <Text style={styles.surfaceCardMeta}>
+                                                            {formatTimeAgo(suggestion.snippet.timestamp)} • {Math.round((suggestion.snippet.importance ?? 0.5) * 100)}% relevance
+                                                        </Text>
+                                                    </View>
+                                                </View>
+                                                <Text style={styles.surfaceCardContent} numberOfLines={2}>
+                                                    {suggestion.snippet.content}
+                                                </Text>
+                                                <View style={styles.surfaceCardFooter}>
+                                                    <Text style={styles.surfaceCardHint}>Tippen zum Erkunden →</Text>
+                                                </View>
+                                            </TouchableOpacity>
+                                        </Animated.View>
+                                    ))}
+                                </ScrollView>
+                                
+                                {/* Page Indicators */}
+                                <View style={styles.surfacePageIndicators}>
+                                    {surfaceSuggestions.map((_, i) => (
+                                        <Animated.View 
+                                            key={i} 
+                                            style={[
+                                                styles.surfacePageDot,
+                                                i === activeSuggestionIndex && styles.surfacePageDotActive
+                                            ]} 
+                                        />
+                                    ))}
+                                </View>
+                            </Animated.View>
                         )}
 
                         <Animated.View style={[styles.heroOrbWrapper, heroOrbStyle]}>
@@ -695,7 +944,7 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
 
                         <Text style={styles.welcomeText}>Was beschäftigt{'\n'}dich gerade?</Text>
                         <Text style={styles.welcomeSubtext}>Ich höre zu, denke mit und merke mir alles.</Text>
-                    </View>
+                    </Animated.View>
                 ) : (
                     <AnimatedScrollView
                         ref={scrollRef}
@@ -713,7 +962,8 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                             />
                         ))}
 
-                        {isReasoning && (
+                        {/* 🎯 Granular Thinking Indicator (Q3C, Q4A) */}
+                        {(isReasoning || isEmbedding || processingState !== 'idle') && (
                             <Animated.View
                                 entering={FadeInUp}
                                 exiting={FadeOut}
@@ -721,17 +971,24 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                                 style={[styles.messageWrapper, styles.aiMessageWrapper]}
                             >
                                 <View style={[styles.messageBubble, styles.aiBubble, styles.thinkingBubble]}>
-                                    <NeuralThinking />
+                                    <View style={styles.thinkingIndicator}>
+                                        <NeuralThinking />
+                                        <Text style={styles.thinkingLabel}>
+                                            {PROCESSING_STATE_LABELS[processingState] || 'Denke nach...'}
+                                        </Text>
+                                    </View>
                                 </View>
                             </Animated.View>
                         )}
                     </AnimatedScrollView>
                 )}
 
-                {/* 🧠 Sprint 1.1: Ghost Suggestions (ACE) */}
-                <View style={styles.suggestionsWrapper}>
-                    <GhostSuggestionsContainer onConnectionCreated={handleAcceptPrediction} />
-                </View>
+                {/* 🧠 Sprint 1.1: Ghost Suggestions (ACE) - Smooth fade in/out */}
+                {surfaceSuggestions.length === 0 && (
+                    <Animated.View style={[styles.suggestionsWrapper, ghostSuggestionsAnimatedStyle]}>
+                        <GhostSuggestionsContainer onConnectionCreated={handleAcceptPrediction} />
+                    </Animated.View>
+                )}
 
                 {/* 🪞 Mirror Reflections (Staging Area) */}
                 <ReflectionSuggester
@@ -763,18 +1020,35 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                     </ScrollView>
                 )}
 
-                <Animated.View
-                    entering={FadeInUp.delay(300).springify()}
-                    style={[styles.inputBar, { bottom: insets.bottom + 20 }]}
+                <KeyboardAvoidingView
+                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                    keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 20}
                 >
-                    <TouchableOpacity
-                        style={[styles.thinkingToggle, deepThinking && styles.thinkingToggleActive]}
-                        onPress={() => {
-                            setDeepThinking(!deepThinking);
-                            Haptics.light();
-                        }}
+                    <Animated.View
+                        entering={FadeInUp.delay(300).springify()}
+                        style={[styles.inputBar, inputBarAnimatedStyle]}
                     >
-                        <Text style={styles.thinkingToggleText}>{deepThinking ? '🧠' : '⚡'}</Text>
+                    {/* 🎤 Left: Voice Recording Button */}
+                    <TouchableOpacity
+                        style={[
+                            styles.micButton,
+                            appState === 'listening' && styles.micButtonActive,
+                            (appState === 'processing' || appState === 'speaking') && styles.micButtonDisabled
+                        ]}
+                        onPress={handleRecordPress}
+                        disabled={appState === 'processing' || appState === 'speaking'}
+                    >
+                        <Animated.View style={animatedButtonStyle}>
+                            {appState === 'listening' ? (
+                                <View style={styles.stopIcon} />
+                            ) : appState === 'processing' || appState === 'speaking' ? (
+                                <ActivityIndicator color="#fff" size="small" />
+                            ) : (
+                                <View style={styles.micCircle}>
+                                    <Text style={styles.micEmoji}>🎤</Text>
+                                </View>
+                            )}
+                        </Animated.View>
                     </TouchableOpacity>
 
                     <View style={styles.inputField}>
@@ -783,6 +1057,7 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                             style={[styles.textInput, { maxHeight: 100 }] as any}
                             value={textInput}
                             onChangeText={handleTextChange}
+                            onFocus={dismissSurfaceCards}
                             placeholder={
                                 appState === 'listening' ? '🔴 Listening...' :
                                     isTranscribing ? '✍️ Transcribing...' :
@@ -797,38 +1072,19 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                         />
                     </View>
 
-                    {textInput.length > 0 ? (
-                        <TouchableOpacity
-                            style={styles.sendButton}
-                            onPress={handleSendText}
-                            disabled={appState !== 'idle'}
-                        >
-                            <Text style={styles.sendIcon}>🚀</Text>
-                        </TouchableOpacity>
-                    ) : (
-                        <TouchableOpacity
-                            style={[
-                                styles.micButton,
-                                appState === 'listening' && styles.micButtonActive,
-                                (appState === 'processing' || appState === 'speaking') && styles.micButtonDisabled
-                            ]}
-                            onPress={handleRecordPress}
-                            disabled={appState === 'processing' || appState === 'speaking'}
-                        >
-                            <Animated.View style={animatedButtonStyle}>
-                                {appState === 'listening' ? (
-                                    <View style={styles.stopIcon} />
-                                ) : appState === 'processing' || appState === 'speaking' ? (
-                                    <ActivityIndicator color="#fff" size="small" />
-                                ) : (
-                                    <View style={styles.micCircle}>
-                                        <Text style={styles.micEmoji}>🎤</Text>
-                                    </View>
-                                )}
-                            </Animated.View>
-                        </TouchableOpacity>
-                    )}
+                    {/* 🚀 Right: Send Text Button */}
+                    <TouchableOpacity
+                        style={[
+                            styles.sendButton,
+                            (!textInput.length || appState !== 'idle') && styles.sendButtonDisabled
+                        ]}
+                        onPress={handleSendText}
+                        disabled={!textInput.length || appState !== 'idle'}
+                    >
+                        <Text style={styles.sendIcon}>🚀</Text>
+                    </TouchableOpacity>
                 </Animated.View>
+                </KeyboardAvoidingView>
             </View>
         </View>
     );
@@ -919,6 +1175,98 @@ const styles = StyleSheet.create({
         textAlign: 'center',
         lineHeight: 22,
     },
+
+    // 🌊 Surface Suggestions
+    surfaceSuggestionsContainer: {
+        width: '100%',
+        paddingHorizontal: 20,
+        marginBottom: 24,
+        gap: 10,
+    },
+    surfaceCard: {
+        backgroundColor: 'rgba(255, 255, 255, 0.04)',
+        borderRadius: 20,
+        padding: 16,
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+        overflow: 'hidden',
+        minHeight: 140,
+    },
+    surfaceCardHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 10,
+        marginBottom: 6,
+    },
+    surfaceCardHeaderText: {
+        flex: 1,
+    },
+    surfaceCardReason: {
+        fontSize: 12,
+        fontWeight: '700',
+        letterSpacing: 0.3,
+        textTransform: 'uppercase',
+        marginBottom: 2,
+    },
+    surfaceCardMeta: {
+        fontSize: 11,
+        color: 'rgba(255, 255, 255, 0.4)',
+        fontWeight: '500',
+    },
+    surfaceCardContent: {
+        fontSize: 14,
+        color: 'rgba(255, 255, 255, 0.7)',
+        lineHeight: 20,
+    },
+    
+    // 🎠 iPhone-style Carousel
+    surfaceCarouselWrapper: {
+        width: '100%',
+        marginBottom: 24,
+    },
+    surfaceCarouselContent: {
+        paddingHorizontal: 20,
+        gap: 16,
+    },
+    surfaceCardInner: {
+        // No flex: 1 - let content determine height
+    },
+    surfaceCardIcon: {
+        width: 32,
+        height: 32,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    surfaceCardFooter: {
+        marginTop: 8,
+        paddingTop: 8,
+        borderTopWidth: 1,
+        borderTopColor: 'rgba(255, 255, 255, 0.06)',
+    },
+    surfaceCardHint: {
+        fontSize: 12,
+        color: 'rgba(255, 255, 255, 0.35)',
+        fontWeight: '500',
+    },
+    surfacePageIndicators: {
+        flexDirection: 'row',
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginTop: 14,
+        gap: 8,
+    },
+    surfacePageDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    },
+    surfacePageDotActive: {
+        width: 20,
+        backgroundColor: 'rgba(255, 255, 255, 0.6)',
+    },
+
     messageList: {
         flex: 1,
     },
@@ -983,24 +1331,36 @@ const styles = StyleSheet.create({
         gap: 10,
         backgroundColor: 'rgba(28, 28, 35, 0.4)',
     },
+    // 🎯 Granular Thinking Indicator (Q3C, Q4A)
+    thinkingIndicator: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+    },
+    thinkingLabel: {
+        fontSize: 14,
+        color: 'rgba(255, 255, 255, 0.6)',
+        fontWeight: '500',
+        fontStyle: 'italic',
+    },
     inputBar: {
         position: 'absolute',
         left: 16,
         right: 16,
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: 'rgba(18, 18, 24, 0.9)',
+        backgroundColor: '#121218',
         borderRadius: 32,
         paddingHorizontal: 8,
         paddingVertical: 8,
         gap: 8,
         borderWidth: 1,
-        borderColor: 'rgba(255, 255, 255, 0.12)',
+        borderColor: 'rgba(255, 255, 255, 0.15)',
         shadowColor: '#000',
-        shadowOffset: { width: 0, height: 12 },
-        shadowOpacity: 0.5,
-        shadowRadius: 20,
-        elevation: 15,
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.4,
+        shadowRadius: 16,
+        elevation: 12,
     },
     inputField: {
         flex: 1,
@@ -1083,10 +1443,10 @@ const styles = StyleSheet.create({
     // 🧠 Sprint 1.1: ACE Integrated Styles
     suggestionsWrapper: {
         position: 'absolute',
-        bottom: 160, // Above staged chips and input bar
         left: 0,
         right: 0,
         zIndex: 100,
+        paddingHorizontal: 16,
     },
     stagedList: {
         position: 'absolute',
@@ -1142,6 +1502,11 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.5,
         shadowRadius: 10,
         elevation: 8,
+    },
+    sendButtonDisabled: {
+        backgroundColor: 'rgba(99, 102, 241, 0.3)',
+        shadowOpacity: 0,
+        elevation: 0,
     },
     sendIcon: {
         fontSize: 18,

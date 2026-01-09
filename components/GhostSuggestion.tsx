@@ -217,6 +217,7 @@ export const GhostSuggestionsContainer: React.FC<GhostSuggestionsContainerProps>
 }) => {
     const predictions = usePredictionStore(state => state.predictions);
     const isProcessing = usePredictionStore(state => state.isProcessing);
+    const [isExpanded, setIsExpanded] = React.useState(false);
 
     const handleAccept = useCallback((prediction: Prediction) => {
         // Record feedback
@@ -250,20 +251,34 @@ export const GhostSuggestionsContainer: React.FC<GhostSuggestionsContainerProps>
             exiting={FadeOut.duration(150)}
             style={styles.container}
         >
-            {/* Header */}
-            <View style={styles.header}>
-                <Text style={styles.headerText}>
-                    {isProcessing ? '🔍 Suche...' : '💡 Verbindungen'}
-                </Text>
-                {predictions.length > 0 && (
-                    <Text style={styles.countBadge}>
-                        {predictions.length}
+            {/* Collapsible Header */}
+            <TouchableOpacity 
+                style={styles.header}
+                onPress={() => {
+                    Haptics.selection();
+                    setIsExpanded(!isExpanded);
+                }}
+                activeOpacity={0.7}
+            >
+                <View style={styles.headerLeft}>
+                    <Text style={styles.headerText}>
+                        {isProcessing ? '🔍 Suche...' : '💡 Verbindungen'}
                     </Text>
-                )}
-            </View>
+                    {predictions.length > 0 && (
+                        <Text style={styles.countBadge}>
+                            {predictions.length}
+                        </Text>
+                    )}
+                </View>
+                <Ionicons 
+                    name={isExpanded ? "chevron-up" : "chevron-down"} 
+                    size={18} 
+                    color="rgba(255, 255, 255, 0.5)" 
+                />
+            </TouchableOpacity>
 
-            {/* Predictions List */}
-            {predictions.map((prediction, index) => (
+            {/* Predictions List - Only show when expanded */}
+            {isExpanded && predictions.map((prediction, index) => (
                 <GhostSuggestion
                     key={prediction.id}
                     prediction={prediction}
@@ -289,7 +304,14 @@ const styles = StyleSheet.create({
     header: {
         flexDirection: 'row',
         alignItems: 'center',
+        justifyContent: 'space-between',
         marginBottom: 12,
+        paddingVertical: 8,
+    },
+
+    headerLeft: {
+        flexDirection: 'row',
+        alignItems: 'center',
     },
 
     headerText: {

@@ -10,6 +10,7 @@
 
 import { getAllSnippets, updateSnippetImportance } from '@/db';
 import { Snippet } from '@/db/schema';
+import { getAllConversations, type Conversation } from '@/services/ConversationService';
 import { useContextStore } from '@/store/contextStore';
 import { useLensStore } from '@/store/lensStore';
 import { Ionicons } from '@expo/vector-icons';
@@ -22,6 +23,7 @@ import {
     SectionList,
     StyleSheet,
     Text,
+    TextInput,
     View
 } from 'react-native';
 import { TouchableOpacity } from 'react-native-gesture-handler';
@@ -228,6 +230,121 @@ const InsightHeader = ({ snippets, stats }: InsightHeaderProps) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════
+// CONVERSATION BENTO BLOCK — Unified Timeline
+// ═══════════════════════════════════════════════════════════════════
+
+interface ConversationBlockProps {
+    conversation: Conversation;
+    snippets: Snippet[];
+    isExpanded: boolean;
+    onToggle: () => void;
+    onResume: () => void;
+}
+
+const ConversationBlock = React.memo(({ conversation, snippets, isExpanded, onToggle, onResume }: ConversationBlockProps) => {
+    const gffBreakdown = conversation.gff_breakdown 
+        ? JSON.parse(conversation.gff_breakdown) 
+        : { goals: 0, facts: 0, feelings: 0 };
+    
+    const timeStr = new Date(conversation.start_timestamp).toLocaleDateString('en-US', { 
+        month: 'short', 
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+    });
+
+    const conversationSnippets = snippets.filter(s => s.conversation_id === conversation.id);
+    const highlightSnippets = conversationSnippets.slice(0, 3); // Show top 3
+
+    return (
+        <Animated.View entering={FadeInUp} style={styles.conversationBlock}>
+            <LinearGradient
+                colors={['rgba(99, 102, 241, 0.08)', 'transparent']}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={StyleSheet.absoluteFill}
+            />
+            
+            {/* Header */}
+            <TouchableOpacity style={styles.conversationHeader} onPress={onToggle} activeOpacity={0.7}>
+                <View style={styles.conversationTitleRow}>
+                    <Text style={styles.conversationTitle} numberOfLines={1}>
+                        {conversation.title}
+                    </Text>
+                    <Ionicons 
+                        name={isExpanded ? 'chevron-up' : 'chevron-down'} 
+                        size={18} 
+                        color="rgba(255,255,255,0.5)" 
+                    />
+                </View>
+                
+                {/* GFF Metadata */}
+                <View style={styles.conversationMeta}>
+                    <Text style={styles.conversationTime}>{timeStr}</Text>
+                    <View style={styles.gffBadges}>
+                        {gffBreakdown.goals > 0 && (
+                            <View style={styles.gffBadge}>
+                                <ShapeIcon type="goal" size={10} />
+                                <Text style={styles.gffBadgeText}>{gffBreakdown.goals}</Text>
+                            </View>
+                        )}
+                        {gffBreakdown.feelings > 0 && (
+                            <View style={styles.gffBadge}>
+                                <ShapeIcon type="feeling" size={10} />
+                                <Text style={styles.gffBadgeText}>{gffBreakdown.feelings}</Text>
+                            </View>
+                        )}
+                        {gffBreakdown.facts > 0 && (
+                            <View style={styles.gffBadge}>
+                                <ShapeIcon type="fact" size={10} />
+                                <Text style={styles.gffBadgeText}>{gffBreakdown.facts}</Text>
+                            </View>
+                        )}
+                    </View>
+                </View>
+            </TouchableOpacity>
+
+            {/* Expanded Content */}
+            {isExpanded && (
+                <Animated.View entering={FadeInUp.springify()} style={styles.conversationExpanded}>
+                    {/* Summary */}
+                    {conversation.summary && (
+                        <Text style={styles.conversationSummary} numberOfLines={3}>
+                            {conversation.summary}
+                        </Text>
+                    )}
+                    
+                    {/* Highlights */}
+                    {highlightSnippets.length > 0 && (
+                        <View style={styles.conversationHighlights}>
+                            <Text style={styles.conversationHighlightsLabel}>KEY THOUGHTS</Text>
+                            {highlightSnippets.map((snippet, i) => (
+                                <View key={snippet.id} style={styles.conversationHighlight}>
+                                    <ShapeIcon type={snippet.type} size={12} />
+                                    <Text style={styles.conversationHighlightText} numberOfLines={2}>
+                                        {snippet.content}
+                                    </Text>
+                                </View>
+                            ))}
+                        </View>
+                    )}
+
+                    {/* Resume Button */}
+                    <TouchableOpacity 
+                        style={styles.conversationResumeBtn} 
+                        onPress={onResume}
+                        activeOpacity={0.7}
+                    >
+                        <Ionicons name="play-circle" size={18} color="#818cf8" />
+                        <Text style={styles.conversationResumeBtnText}>Resume Session</Text>
+                    </TouchableOpacity>
+                </Animated.View>
+            )}
+        </Animated.View>
+    );
+});
+
+// ═══════════════════════════════════════════════════════════════════
 // TIMELINE ITEM (Memoized for performance)
 // ═══════════════════════════════════════════════════════════════════
 
@@ -392,8 +509,12 @@ interface Section {
 export function MemoryScreen() {
     const insets = useSafeAreaInsets();
     const [snippets, setSnippets] = useState<Snippet[]>([]);
+    const [conversations, setConversations] = useState<Conversation[]>([]);
+    const [expandedConvId, setExpandedConvId] = useState<number | null>(null);
     const [refreshing, setRefreshing] = useState(false);
     const [filter, setFilter] = useState<'all' | 'fact' | 'feeling' | 'goal'>('all');
+    const [searchQuery, setSearchQuery] = useState('');
+    const [isSearching, setIsSearching] = useState(false);
 
     const nodeRefreshTrigger = useContextStore(state => state.nodeRefreshTrigger);
 
@@ -404,22 +525,55 @@ export function MemoryScreen() {
         setSnippets(data);
     }, []);
 
+    const loadConversations = useCallback(async () => {
+        console.log('[Chronicle] Loading conversations...');
+        const data = await getAllConversations(20);
+        console.log('[Chronicle] Loaded', data.length, 'conversations');
+        setConversations(data);
+    }, []);
+
     useEffect(() => {
         console.log('[Chronicle] Refresh triggered, nodeRefreshTrigger:', nodeRefreshTrigger);
         loadSnippets();
-    }, [nodeRefreshTrigger, loadSnippets]);
+        loadConversations();
+    }, [nodeRefreshTrigger, loadSnippets, loadConversations]);
 
     const onRefresh = async () => {
         setRefreshing(true);
-        await loadSnippets();
+        await Promise.all([loadSnippets(), loadConversations()]);
         setRefreshing(false);
     };
+
+    // 🔍 Semantic Search Handler
+    const handleSearch = useCallback(async (query: string) => {
+        setSearchQuery(query);
+        
+        if (!query.trim()) {
+            // Empty search: reload all snippets
+            await loadSnippets();
+            setIsSearching(false);
+            return;
+        }
+
+        setIsSearching(true);
+        try {
+            // Hybrid search: combines text + semantic similarity
+            const results = await hybridSearch(query, 50);
+            setSnippets(results as Snippet[]);
+            console.log(`[Chronicle] Search results: ${results.length} snippets for "${query}"`);
+        } catch (error) {
+            console.error('[Chronicle] Search failed:', error);
+            await loadSnippets(); // Fallback to all snippets
+        } finally {
+            setIsSearching(false);
+        }
+    }, [loadSnippets]);
 
     const filteredSnippets = filter === 'all'
         ? snippets
         : snippets.filter(s => s.type === filter);
 
-    // Group snippets by date
+    // Group snippets by date + prepend Conversations section
     const sections: Section[] = useMemo(() => {
         const groups: { [key: string]: Snippet[] } = {};
         const now = new Date();
@@ -448,8 +602,8 @@ export function MemoryScreen() {
             groups[label].push(s);
         });
 
-        // Sort sections by most recent first
-        return Object.entries(groups)
+        // Build sections array (without Conversations section, handled in ListHeader)
+        const snippetSections = Object.entries(groups)
             .map(([title, data]) => ({ title, data }))
             .sort((a, b) => {
                 if (a.title === 'Today') return -1;
@@ -458,6 +612,8 @@ export function MemoryScreen() {
                 if (b.title === 'Yesterday') return 1;
                 return 0;
             });
+
+        return snippetSections;
     }, [filteredSnippets]);
 
     const stats = {
@@ -472,6 +628,25 @@ export function MemoryScreen() {
         // Transition to Horizon disabled - keeping user in Chronicle
         console.log('[Chronicle] View action for node:', snippetId, '(transition disabled)');
         // useContextStore.getState().navigateToNode(snippetId);
+    }, []);
+
+    // 🔄 Resume Conversation Handler
+    const handleResumeConversation = useCallback(async (conversationId: number) => {
+        try {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            
+            console.log('[Chronicle] Resuming conversation:', conversationId);
+            
+            // Restore session in OrbitStore
+            await resumeSessionInStore(conversationId);
+            
+            // Navigate to Orbit
+            useContextStore.getState().setActiveScreen('orbit');
+            
+            console.log('[Chronicle] Session restored, navigated to Orbit');
+        } catch (error) {
+            console.error('[Chronicle] Resume failed:', error);
+        }
     }, []);
 
     const renderSectionHeader = ({ section }: { section: Section }) => (
@@ -527,6 +702,31 @@ export function MemoryScreen() {
 
                         {/* Insight Header */}
                         <InsightHeader snippets={snippets} stats={stats} />
+
+                        {/* 🔍 Search Bar */}
+                        <Animated.View entering={FadeInUp.delay(150)} style={styles.searchContainer}>
+                            <Ionicons 
+                                name={isSearching ? "hourglass-outline" : "search-outline"} 
+                                size={18} 
+                                color="rgba(255,255,255,0.5)" 
+                                style={styles.searchIcon}
+                            />
+                            <TextInput
+                                style={styles.searchInput}
+                                placeholder="Semantic search..."
+                                placeholderTextColor="rgba(255,255,255,0.3)"
+                                value={searchQuery}
+                                onChangeText={handleSearch}
+                                autoCapitalize="none"
+                                autoCorrect={false}
+                                returnKeyType="search"
+                            />
+                            {searchQuery.length > 0 && (
+                                <Pressable onPress={() => handleSearch('')} hitSlop={8}>
+                                    <Ionicons name="close-circle" size={18} color="rgba(255,255,255,0.4)" />
+                                </Pressable>
+                            )}
+                        </Animated.View>
 
                         {/* Filter Pills */}
                         <Animated.View entering={FadeInUp.delay(200)} style={styles.filterRow}>
@@ -658,7 +858,27 @@ const styles = StyleSheet.create({
         fontSize: 16,
         fontWeight: '700',
     },
-
+    // Search Bar
+    searchContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: 'rgba(255, 255, 255, 0.06)',
+        borderRadius: 16,
+        paddingHorizontal: 14,
+        paddingVertical: 10,
+        marginBottom: 16,
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.08)',
+    },
+    searchIcon: {
+        marginRight: 10,
+    },
+    searchInput: {
+        flex: 1,
+        fontSize: 15,
+        color: '#fff',
+        fontWeight: '500',
+    },
     // Filter Pills
     filterRow: {
         flexDirection: 'row',
@@ -849,5 +1069,114 @@ const styles = StyleSheet.create({
     emptySubtitle: {
         fontSize: 14,
         color: '#666',
+    },
+
+    // Conversations
+    conversationsContainer: {
+        marginBottom: 24,
+    },
+    conversationBlock: {
+        marginHorizontal: 20,
+        marginBottom: 12,
+        borderRadius: 16,
+        overflow: 'hidden',
+        borderWidth: 1,
+        borderColor: 'rgba(99, 102, 241, 0.2)',
+        backgroundColor: 'rgba(10, 10, 15, 0.6)',
+    },
+    conversationHeader: {
+        padding: 16,
+    },
+    conversationTitleRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    conversationTitle: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: '#fff',
+        flex: 1,
+        marginRight: 12,
+    },
+    conversationMeta: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+    },
+    conversationTime: {
+        fontSize: 12,
+        color: 'rgba(255, 255, 255, 0.4)',
+    },
+    gffBadges: {
+        flexDirection: 'row',
+        gap: 8,
+    },
+    gffBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: 8,
+        backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    },
+    gffBadgeText: {
+        fontSize: 11,
+        fontWeight: '600',
+        color: 'rgba(255, 255, 255, 0.7)',
+    },
+    conversationExpanded: {
+        paddingHorizontal: 16,
+        paddingBottom: 16,
+        borderTopWidth: 1,
+        borderTopColor: 'rgba(255, 255, 255, 0.06)',
+    },
+    conversationSummary: {
+        fontSize: 13,
+        lineHeight: 20,
+        color: 'rgba(255, 255, 255, 0.65)',
+        marginTop: 12,
+        marginBottom: 16,
+    },
+    conversationHighlights: {
+        marginBottom: 16,
+    },
+    conversationHighlightsLabel: {
+        fontSize: 10,
+        fontWeight: '700',
+        color: 'rgba(255, 255, 255, 0.4)',
+        letterSpacing: 1,
+        marginBottom: 8,
+    },
+    conversationHighlight: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 10,
+        paddingVertical: 6,
+    },
+    conversationHighlightText: {
+        flex: 1,
+        fontSize: 13,
+        lineHeight: 18,
+        color: 'rgba(255, 255, 255, 0.6)',
+    },
+    conversationResumeBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        paddingVertical: 12,
+        paddingHorizontal: 20,
+        borderRadius: 12,
+        backgroundColor: 'rgba(99, 102, 241, 0.15)',
+        borderWidth: 1,
+        borderColor: 'rgba(99, 102, 241, 0.3)',
+    },
+    conversationResumeBtnText: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: '#818cf8',
     },
 });

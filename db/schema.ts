@@ -24,6 +24,49 @@ export interface Snippet {
   last_accessed: number | null;
   reasoning?: string;
   utility_data?: string; // JSON String for personas (Flashcards, Strategy, etc.)
+  conversation_id?: number | null; // NEW: Link to conversation session
+}
+
+/**
+ * Ambient Persistence: Conversation Session
+ * A conversation is a threaded context container for related thoughts
+ */
+export interface Conversation {
+  id: number;
+  title: string; // AI-generated after 3rd message
+  start_timestamp: number;
+  last_update: number;
+  summary: string; // GFF-aware summary for context injection
+  context_metadata: string; // JSON string with GFF tags, entities, lens mode
+  gff_breakdown?: string; // JSON: { goals: N, facts: N, feelings: N }
+  is_active: number; // 1 = active, 0 = archived
+  created_at: number;
+}
+
+/**
+ * Conversation Messages: Original transcript for lossless restore
+ * Separate from Snippets (which are extracted GFF truths)
+ */
+export interface ConversationMessage {
+  id: number;
+  conversation_id: number;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  timestamp: number;
+  metadata?: string; // JSON: { reasoning?: string, model?: string }
+}
+
+/**
+ * Context Metadata Structure (stored as JSON string)
+ */
+export interface ContextMetadata {
+  primary_gff_intent: 'GOAL' | 'FEELING' | 'FACT' | 'MIXED';
+  active_lens: 'EXPLORE' | 'LEARN' | 'STRATEGY' | 'REFLECT';
+  sentiment_trend: number; // -1 to 1 (start vs end)
+  gff_tags: string[]; // All hashtags from this session
+  entities: { name: string; type: string; id: number }[];
+  ai_model: 'gpt-4o-mini' | 'deepseek-r1';
+  user_intent?: string;
 }
 
 /**
@@ -195,6 +238,38 @@ export const SCHEMA = {
     CREATE INDEX IF NOT EXISTS idx_mentions_snippet ON entity_mentions(snippet_id);
   `,
 
+  // Ambient Persistence: Conversation Sessions
+  conversations: `
+    CREATE TABLE IF NOT EXISTS conversations (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      title TEXT NOT NULL DEFAULT 'Untitled Session',
+      start_timestamp INTEGER NOT NULL,
+      last_update INTEGER NOT NULL,
+      summary TEXT DEFAULT '',
+      context_metadata TEXT DEFAULT '{}',
+      gff_breakdown TEXT DEFAULT '{}',
+      is_active INTEGER DEFAULT 1,
+      created_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_conversations_active ON conversations(is_active);
+    CREATE INDEX IF NOT EXISTS idx_conversations_timestamp ON conversations(start_timestamp DESC);
+  `,
+
+  // Conversation Messages: Original transcript for session restore
+  conversationMessages: `
+    CREATE TABLE IF NOT EXISTS conversation_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversation_id INTEGER NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('user', 'assistant', 'system')),
+      content TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      metadata TEXT DEFAULT '{}',
+      FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_messages_conversation ON conversation_messages(conversation_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON conversation_messages(timestamp);
+  `,
+
   // Migrations for schema evolution
   migrations: [
     `ALTER TABLE snippets ADD COLUMN z REAL DEFAULT 0;`,
@@ -204,6 +279,8 @@ export const SCHEMA = {
     `ALTER TABLE snippets ADD COLUMN cluster_label TEXT;`,
     `ALTER TABLE snippets ADD COLUMN reasoning TEXT;`,
     `ALTER TABLE snippets ADD COLUMN utility_data TEXT DEFAULT '{}';`,
-    `ALTER TABLE snippets ADD COLUMN hashtags TEXT;`
+    `ALTER TABLE snippets ADD COLUMN hashtags TEXT;`,
+    // Ambient Persistence: Add conversation_id to snippets
+    `ALTER TABLE snippets ADD COLUMN conversation_id INTEGER REFERENCES conversations(id) ON DELETE SET NULL;`,
   ]
 };

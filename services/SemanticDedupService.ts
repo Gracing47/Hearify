@@ -4,14 +4,19 @@
  * Architecture:
  * 1. Generate embedding for new snippet
  * 2. Search existing snippets for semantic matches
- * 3. Apply Smart Merge logic
+ * 3. Apply Smart Merge logic (Q5B, Q6B Strategy)
  * 4. Provide user feedback via Toast Queue
  * 
- * Thresholds:
- * - > 0.90: Near-duplicate (KEEP_OLD or MERGE_TAGS)
- * - > 0.85: High similarity (MERGE or REPLACE)
- * - 0.70-0.85: Related (CREATE_NEW with edge)
- * - < 0.70: Unique (CREATE_NEW)
+ * Thresholds (Q5B - Moderate: 0.75+):
+ * - > 0.92: Near-duplicate → KEEP_OLD or MERGE_TAGS
+ * - > 0.85: High similarity → REPLACE (longer wins) or MERGE
+ * - > 0.75: Conceptual match → MERGE_CONTENT (Q6B: Aggregate metadata)
+ * - < 0.75: Unique → CREATE_NEW
+ * 
+ * Merge Strategy (Q6B):
+ * - Longer/richer content wins as primary
+ * - Hashtags, entities, and metadata aggregated
+ * - conversation_id from newest snippet preserved
  */
 
 import { findSimilarSnippets, getDb, insertSnippet } from '@/db';
@@ -24,13 +29,13 @@ import { cosineSimilarityFull, normalizeVector } from '@/utils/vectorMath';
 import { extractAndStoreEntities } from './entityExtraction';
 
 // ============================================================================
-// CONSTANTS
+// CONSTANTS (Q5B: 0.75+ Threshold)
 // ============================================================================
 
 const THRESHOLDS = {
-    NEAR_DUPLICATE: 0.92,  // Almost identical
-    HIGH_SIMILARITY: 0.85, // Same concept
-    RELATED: 0.70,         // Related topic
+    NEAR_DUPLICATE: 0.92,  // Almost identical → KEEP_OLD
+    HIGH_SIMILARITY: 0.85, // Same concept → REPLACE or MERGE
+    CONCEPTUAL_MATCH: 0.75, // Related topic (Q5B) → MERGE_CONTENT
 };
 
 // ============================================================================
@@ -52,6 +57,7 @@ export interface SaveSnippetInput {
     topic?: string;
     reasoning?: string;
     hashtags?: string;
+    conversationId?: number | null; // 🆕 AMBIENT PERSISTENCE
 }
 
 // ============================================================================
@@ -70,7 +76,7 @@ export interface SaveSnippetInput {
  * 5. User feedback (toasts)
  */
 export async function saveSnippetWithDedup(input: SaveSnippetInput): Promise<SaveSnippetResult> {
-    const { content, type, sentiment = 'neutral', topic = 'misc', reasoning, hashtags } = input;
+    const { content, type, sentiment = 'neutral', topic = 'misc', reasoning, hashtags, conversationId } = input;
 
     console.log('[SemanticDedup] Processing:', content.substring(0, 50) + '...');
 
@@ -118,8 +124,8 @@ export async function saveSnippetWithDedup(input: SaveSnippetInput): Promise<Sav
 
                 console.log('[SemanticDedup] Best match similarity:', similarity.toFixed(3));
 
-                // High similarity detected - analyze merge
-                if (similarity >= THRESHOLDS.RELATED) {
+                // Q5B: Conceptual match at 0.75+ triggers merge analysis
+                if (similarity >= THRESHOLDS.CONCEPTUAL_MATCH) {
                     const decision = analyzeMerge({
                         oldText: bestMatch.content,
                         newText: content,
@@ -139,7 +145,8 @@ export async function saveSnippetWithDedup(input: SaveSnippetInput): Promise<Sav
                         normalizedEmbedding,
                         embeddingFast,
                         reasoning,
-                        hashtags
+                        hashtags,
+                        conversationId // 🆕 AMBIENT PERSISTENCE
                     );
 
                     return result;
@@ -160,7 +167,8 @@ export async function saveSnippetWithDedup(input: SaveSnippetInput): Promise<Sav
             undefined, // x
             undefined, // y
             reasoning,
-            hashtags
+            hashtags,
+            conversationId // 🆕 AMBIENT PERSISTENCE
         );
 
         console.log('[SemanticDedup] Created new snippet:', snippetId);
@@ -172,23 +180,23 @@ export async function saveSnippetWithDedup(input: SaveSnippetInput): Promise<Sav
         useContextStore.getState().triggerNodeRefresh();
 
         // Show success toast
-        toast.success('Memory Saved', getTypeLabel(type));
+        toast.success('Gespeichert', getTypeLabel(type));
 
         return {
             success: true,
             snippetId,
             action: 'created',
-            message: 'New unique thought stored',
+            message: 'Neuer einzigartiger Gedanke gespeichert',
         };
 
     } catch (error) {
         console.error('[SemanticDedup] Error:', error);
-        toast.error('Save Failed', 'Could not store memory');
+        toast.error('Speichern fehlgeschlagen', 'Gedanke konnte nicht gespeichert werden');
         return {
             success: false,
             snippetId: null,
             action: 'skipped',
-            message: error instanceof Error ? error.message : 'Unknown error',
+            message: error instanceof Error ? error.message : 'Unbekannter Fehler',
         };
     }
 }
@@ -207,7 +215,8 @@ async function executeMergeDecision(
     newEmbedding: Float32Array,
     newEmbeddingFast: Float32Array | null,
     reasoning?: string,
-    newHashtags?: string
+    newHashtags?: string,
+    conversationId?: number | null // 🆕 AMBIENT PERSISTENCE
 ): Promise<SaveSnippetResult> {
     const db = getDb();
     const mergedHashtags = mergeHashtags(existingSnippet.hashtags, newHashtags);
@@ -220,7 +229,7 @@ async function executeMergeDecision(
                 [Date.now(), mergedHashtags, existingSnippet.id]
             );
 
-            toast.duplicate('Already Remembered', 'Similar memory exists');
+            toast.duplicate('Bereits gespeichert', 'Ähnlicher Gedanke existiert');
 
             return {
                 success: true,
@@ -259,7 +268,7 @@ async function executeMergeDecision(
             }
 
             useContextStore.getState().triggerNodeRefresh();
-            toast.merged('Memory Updated', 'Expanded existing thought');
+            toast.merged('Gedanke erweitert', 'Reichhaltigere Version gespeichert');
 
             // Extract entities from updated content
             extractEntitiesInBackground(existingSnippet.id, newContent);
@@ -273,14 +282,68 @@ async function executeMergeDecision(
             };
 
         case 'MERGE_TAGS':
-        case 'MERGE_CONTENT':
-            // Update timestamp, topic and hashtags (soft merge)
+            // Soft merge: Update timestamp and hashtags only
             await db.execute(
                 'UPDATE snippets SET timestamp = ?, topic = ?, hashtags = ? WHERE id = ?',
                 [Date.now(), topic, mergedHashtags, existingSnippet.id]
             );
 
-            toast.merged('Memory Linked', 'Added to existing thought');
+            toast.merged('Verknüpft', 'Metadaten zusammengeführt');
+
+            return {
+                success: true,
+                snippetId: existingSnippet.id,
+                action: 'merged',
+                message: decision.reason,
+                existingSnippetId: existingSnippet.id,
+            };
+
+        case 'MERGE_CONTENT':
+            // Q6B: Full content merge - richer content wins
+            const shouldReplaceContent = newContent.length > existingSnippet.content.length;
+            const mergedConversationId = conversationId ?? existingSnippet.conversation_id ?? null;
+            
+            if (shouldReplaceContent) {
+                // New content is richer - replace but aggregate metadata
+                await db.execute(
+                    `UPDATE snippets SET 
+                        content = ?, 
+                        type = ?,
+                        sentiment = ?,
+                        topic = ?,
+                        hashtags = ?,
+                        timestamp = ?,
+                        reasoning = ?,
+                        conversation_id = ?
+                    WHERE id = ?`,
+                    [newContent, newType, sentiment, topic, mergedHashtags, Date.now(), reasoning ?? null, mergedConversationId, existingSnippet.id]
+                );
+
+                // Update vector with new embedding
+                await db.execute(
+                    'UPDATE vec_snippets SET embedding = ? WHERE id = ?',
+                    [newEmbedding, existingSnippet.id]
+                );
+
+                if (newEmbeddingFast) {
+                    await db.execute(
+                        'UPDATE vec_snippets_fast SET embedding = ? WHERE id = ?',
+                        [newEmbeddingFast, existingSnippet.id]
+                    );
+                }
+
+                // Re-extract entities from merged content
+                extractEntitiesInBackground(existingSnippet.id, newContent);
+            } else {
+                // Existing content is richer - just update metadata
+                await db.execute(
+                    'UPDATE snippets SET timestamp = ?, topic = ?, hashtags = ?, conversation_id = ? WHERE id = ?',
+                    [Date.now(), topic, mergedHashtags, mergedConversationId, existingSnippet.id]
+                );
+            }
+
+            useContextStore.getState().triggerNodeRefresh();
+            toast.merged('Gedanken vereint', shouldReplaceContent ? 'Erweiterte Version gespeichert' : 'Kontext angereichert');
 
             return {
                 success: true,
@@ -303,7 +366,8 @@ async function executeMergeDecision(
                 undefined,
                 undefined,
                 reasoning,
-                newHashtags
+                newHashtags,
+                conversationId // 🆕 AMBIENT PERSISTENCE
             );
 
             // Create semantic edge if related
@@ -321,7 +385,7 @@ async function executeMergeDecision(
             }
 
             useContextStore.getState().triggerNodeRefresh();
-            toast.success('Memory Saved', 'New related thought stored');
+            toast.success('Neuer Gedanke', 'Verknüpft mit ähnlichem Eintrag');
 
             // Extract entities in background
             extractEntitiesInBackground(snippetId, newContent);
@@ -330,7 +394,7 @@ async function executeMergeDecision(
                 success: true,
                 snippetId,
                 action: 'created',
-                message: 'Created with semantic link',
+                message: 'Neuer Eintrag mit semantischer Verbindung',
                 existingSnippetId: existingSnippet.id,
             };
     }
@@ -386,9 +450,9 @@ async function getSnippetEmbedding(snippetId: number): Promise<Float32Array | nu
 
 function getTypeLabel(type: 'fact' | 'feeling' | 'goal'): string {
     switch (type) {
-        case 'fact': return '💎 Fact captured';
-        case 'feeling': return '💜 Feeling stored';
-        case 'goal': return '🎯 Goal remembered';
+        case 'fact': return '💎 Fakt erfasst';
+        case 'feeling': return '💜 Gefühl gespeichert';
+        case 'goal': return '🎯 Ziel gemerkt';
     }
 }
 
