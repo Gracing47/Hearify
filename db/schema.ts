@@ -270,6 +270,24 @@ export const SCHEMA = {
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON conversation_messages(timestamp);
   `,
 
+  // Q9A: Calendar Events Cache (7-day offline support)
+  calendarEventsCache: `
+    CREATE TABLE IF NOT EXISTS calendar_events_cache (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      start_time INTEGER NOT NULL,
+      end_time INTEGER NOT NULL,
+      is_all_day INTEGER DEFAULT 0,
+      description TEXT,
+      location TEXT,
+      attendees TEXT,
+      cached_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_calendar_start ON calendar_events_cache(start_time);
+    CREATE INDEX IF NOT EXISTS idx_calendar_expires ON calendar_events_cache(expires_at);
+  `,
+
   // Migrations for schema evolution
   migrations: [
     `ALTER TABLE snippets ADD COLUMN z REAL DEFAULT 0;`,

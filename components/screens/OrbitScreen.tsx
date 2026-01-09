@@ -54,7 +54,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { processWithGPT } from '@/services/openai-chat';
+import { processWithBatchSynthesis, processWithGPT } from '@/services/openai-chat';
 import { getSuggestionColor, getSuggestionIcon, getSurfaceSuggestions, type SurfaceSuggestion } from '@/services/SurfaceSuggestionService';
 import * as Haptics from '@/utils/haptics';
 
@@ -63,6 +63,10 @@ import { useEcoMode } from '@/hooks/useEcoMode';
 import { usePredictions } from '@/hooks/usePredictions';
 import { ace } from '@/services/AmbientConnectionEngine';
 import { usePredictionStore, type Prediction } from '@/store/predictionStore';
+
+// 🔗 Phase 6: Batch Synthesis
+import type { BatchContext } from '@/services/BatchSynthesisService';
+import { usePendingBatchReflect, useSelectionActions } from '@/store/chronicleStore';
 
 // 📐 Card dimensions for iPhone-style carousel
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -124,6 +128,134 @@ const MessageBubble = React.memo(({ msg, isAI }: { msg: any, isAI: boolean }) =>
             </View>
         </Animated.View>
     );
+});
+
+/**
+ * 🔗 Batch Synthesis Header - Shows GFF breakdown during batch analysis
+ */
+const BatchSynthesisHeader = React.memo(({ context }: { context: BatchContext }) => {
+    const { gffBreakdown, count, timeRange } = context;
+    
+    // Format time span
+    const formatTimeSpan = () => {
+        const days = timeRange.spanDays;
+        if (days === 0) return 'Heute';
+        if (days === 1) return 'Gestern - Heute';
+        if (days < 7) return `${days} Tage`;
+        if (days < 30) return `${Math.ceil(days / 7)} Wochen`;
+        return `${Math.ceil(days / 30)} Monate`;
+    };
+
+    return (
+        <Animated.View
+            entering={FadeInUp.springify().damping(20).stiffness(100)}
+            style={batchStyles.container}
+        >
+            <View style={batchStyles.header}>
+                <Ionicons name="git-merge-outline" size={18} color="rgba(255, 255, 255, 0.8)" />
+                <Text style={batchStyles.title}>Batch-Synthese</Text>
+            </View>
+            
+            <View style={batchStyles.stats}>
+                <View style={batchStyles.statItem}>
+                    <Text style={batchStyles.statValue}>{count}</Text>
+                    <Text style={batchStyles.statLabel}>Gedanken</Text>
+                </View>
+                <View style={batchStyles.statDivider} />
+                <View style={batchStyles.statItem}>
+                    <Text style={batchStyles.statValue}>{formatTimeSpan()}</Text>
+                    <Text style={batchStyles.statLabel}>Zeitraum</Text>
+                </View>
+            </View>
+            
+            <View style={batchStyles.gffRow}>
+                {gffBreakdown.goals > 0 && (
+                    <View style={[batchStyles.gffBadge, { backgroundColor: 'rgba(74, 222, 128, 0.2)' }]}>
+                        <Text style={[batchStyles.gffText, { color: '#4ade80' }]}>
+                            🎯 {gffBreakdown.goals}
+                        </Text>
+                    </View>
+                )}
+                {gffBreakdown.feelings > 0 && (
+                    <View style={[batchStyles.gffBadge, { backgroundColor: 'rgba(168, 85, 247, 0.2)' }]}>
+                        <Text style={[batchStyles.gffText, { color: '#a855f7' }]}>
+                            💜 {gffBreakdown.feelings}
+                        </Text>
+                    </View>
+                )}
+                {gffBreakdown.facts > 0 && (
+                    <View style={[batchStyles.gffBadge, { backgroundColor: 'rgba(59, 130, 246, 0.2)' }]}>
+                        <Text style={[batchStyles.gffText, { color: '#3b82f6' }]}>
+                            📘 {gffBreakdown.facts}
+                        </Text>
+                    </View>
+                )}
+            </View>
+        </Animated.View>
+    );
+});
+
+const batchStyles = StyleSheet.create({
+    container: {
+        marginHorizontal: 16,
+        marginBottom: 12,
+        padding: 12,
+        backgroundColor: 'rgba(255, 255, 255, 0.06)',
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: 'rgba(255, 255, 255, 0.1)',
+    },
+    header: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: 8,
+    },
+    title: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: 'rgba(255, 255, 255, 0.8)',
+    },
+    stats: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    statItem: {
+        alignItems: 'center',
+        flex: 1,
+    },
+    statValue: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#fff',
+    },
+    statLabel: {
+        fontSize: 10,
+        color: 'rgba(255, 255, 255, 0.5)',
+        textTransform: 'uppercase',
+        letterSpacing: 0.5,
+    },
+    statDivider: {
+        width: 1,
+        height: 24,
+        backgroundColor: 'rgba(255, 255, 255, 0.1)',
+        marginHorizontal: 12,
+    },
+    gffRow: {
+        flexDirection: 'row',
+        gap: 8,
+        flexWrap: 'wrap',
+    },
+    gffBadge: {
+        paddingHorizontal: 10,
+        paddingVertical: 4,
+        borderRadius: 12,
+    },
+    gffText: {
+        fontSize: 12,
+        fontWeight: '600',
+    },
 });
 
 const ReflectionSuggester = ({ reflections, onSave, onDismiss }: {
@@ -243,10 +375,20 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     const { reflect } = useLocalSearchParams<{ reflect?: string }>();
     const lastReflectedContent = useRef<string | null>(null);
 
+    // 🔗 Phase 6: Batch Synthesis State
+    const pendingBatchReflect = usePendingBatchReflect();
+    const { clearPendingBatchReflect } = useSelectionActions();
+    const [activeBatchContext, setActiveBatchContext] = useState<BatchContext | null>(null);
+    const batchReflectProcessed = useRef(false);
+
     // 🌊 Surface Suggestions State
     const [surfaceSuggestions, setSurfaceSuggestions] = useState<SurfaceSuggestion[]>([]);
     const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(0);
     const surfaceCardsOpacity = useSharedValue(1);
+
+    // 🗓️ Calendar Proposal State (Action Catalyst)
+    const [calendarProposal, setCalendarProposal] = useState<EventProposal | null>(null);
+    const calendarStatus = useCalendarStore((s) => s.status);
 
     // Helper to reset opacity after fade
     const resetSurfaceCardsOpacity = useCallback(() => {
@@ -355,6 +497,106 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     // 👻 Ghost Mode (Sprint 2.1)
     const isGhostMode = useContextStore(state => state.isGhostMode);
     const setGhostMode = useContextStore(state => state.setGhostMode);
+
+    // 🔗 Phase 6: Handle Batch Reflect from Chronicle
+    useEffect(() => {
+        if (pendingBatchReflect && !batchReflectProcessed.current) {
+            batchReflectProcessed.current = true;
+            console.log('[Orbit] 🔗 Batch reflect received:', pendingBatchReflect.context.count, 'snippets');
+
+            const processBatch = async () => {
+                // Show disconnection warning if present
+                if (pendingBatchReflect.disconnectionWarning) {
+                    Alert.alert(
+                        '⚠️ Thematischer Hinweis',
+                        pendingBatchReflect.disconnectionWarning,
+                        [
+                            {
+                                text: 'Trotzdem analysieren',
+                                onPress: () => executeBatchSynthesis(),
+                            },
+                            {
+                                text: 'Zurück zur Auswahl',
+                                style: 'cancel',
+                                onPress: () => {
+                                    clearPendingBatchReflect();
+                                    batchReflectProcessed.current = false;
+                                },
+                            },
+                        ]
+                    );
+                } else {
+                    executeBatchSynthesis();
+                }
+            };
+
+            const executeBatchSynthesis = async () => {
+                try {
+                    Haptics.thinking();
+                    setAppState('processing');
+                    setProcessingState('reasoning');
+
+                    // Set the active batch context for the header
+                    setActiveBatchContext(pendingBatchReflect.context);
+
+                    // Add a user "message" to show what we're analyzing
+                    const userSummary = `📚 Batch-Analyse von ${pendingBatchReflect.context.count} Gedanken`;
+                    addUserMessage(userSummary);
+
+                    // Get or create conversation session
+                    let conversationId = useConversationStore.getState().currentConversationId;
+                    if (!conversationId) {
+                        conversationId = await useConversationStore.getState().startNewSession();
+                    }
+
+                    // Call synthesis API
+                    const result = await processWithBatchSynthesis(
+                        pendingBatchReflect.systemPrompt,
+                        pendingBatchReflect.userMessage,
+                        conversationId
+                    );
+
+                    // Add AI response
+                    addAIResponse(result.response, '');
+                    setReasoning(false);
+                    setProcessingState('generating');
+
+                    // Speak the response
+                    setAppState('speaking');
+                    setSpeaking(true);
+                    setProcessingState('speaking');
+                    try {
+                        await tts.speakStreaming(result.response, () => {
+                            Haptics.speaking();
+                        });
+                    } catch (ttsError) {
+                        console.error('[BatchSynthesis] TTS failed:', ttsError);
+                    }
+
+                    setSpeaking(false);
+                    setAppState('idle');
+                    setProcessingState('idle');
+
+                    // Clear the pending payload
+                    clearPendingBatchReflect();
+                } catch (error) {
+                    console.error('[BatchSynthesis] Error:', error);
+                    setError('Batch-Analyse fehlgeschlagen');
+                    setAppState('idle');
+                    setProcessingState('idle');
+                    clearPendingBatchReflect();
+                }
+            };
+
+            // Small delay to let screen mount
+            setTimeout(processBatch, 300);
+        }
+
+        // Reset flag when payload is cleared
+        if (!pendingBatchReflect) {
+            batchReflectProcessed.current = false;
+        }
+    }, [pendingBatchReflect, clearPendingBatchReflect, addUserMessage, addAIResponse, setProcessingState, setReasoning, setSpeaking, setError, tts]);
 
     const recordButtonScale = useSharedValue(1);
 
@@ -646,6 +888,8 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
 
             setProcessingState('reasoning'); // 🎯 Q3C: "Denke nach..."
             
+            let calendarProposalData: CalendarProposalData | null | undefined = null;
+            
             if (deepThinking) {
                 setReasoning(true);
                 const result = await processWithReasoning(userText, context, history);
@@ -657,11 +901,28 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                 const result = await processWithGPT(userText, context, history, conversationId);
                 finalResponse = result.response;
                 snippets = result.snippets;
+                calendarProposalData = result.calendarProposal; // 🚀 Action Catalyst
             }
 
             addAIResponse(finalResponse, finalReasoning);
             setReasoning(false);
             setProcessingState('generating'); // 🎯 Q3C: "Formuliere Antwort..."
+
+            // 🗓️ Handle Calendar Proposal from Action Catalyst
+            if (calendarProposalData && calendarStatus === 'connected') {
+                try {
+                    const startTime = new Date(calendarProposalData.startTime);
+                    const proposal = await createEventProposal(
+                        calendarProposalData.title,
+                        startTime,
+                        calendarProposalData.duration
+                    );
+                    setCalendarProposal(proposal);
+                    console.log('[Orbit] Calendar proposal created:', proposal.title);
+                } catch (e) {
+                    console.warn('[Orbit] Failed to create calendar proposal:', e);
+                }
+            }
 
             // Save snippets with staged edges
             setEmbedding(true);
@@ -849,8 +1110,34 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                             <DeltaCard delta={dailyDelta} onDismiss={() => setDeltaShown(false)} />
                         )}
 
+                        {/* 🗓️ Calendar Proposal Card (Action Catalyst) */}
+                        {calendarProposal && !dailyDelta && (
+                            <CalendarProposalCard
+                                proposal={calendarProposal}
+                                onConfirm={(eventId) => {
+                                    console.log('[Orbit] Event created:', eventId);
+                                    setCalendarProposal(null);
+                                    Haptics.success();
+                                }}
+                                onDismiss={() => {
+                                    setCalendarProposal(null);
+                                    Haptics.light();
+                                }}
+                                onSelectAlternative={async (slot) => {
+                                    // User selected an alternative time slot
+                                    const newProposal = await createEventProposal(
+                                        calendarProposal.title,
+                                        slot.start,
+                                        slot.durationMinutes
+                                    );
+                                    setCalendarProposal(newProposal);
+                                    Haptics.selection();
+                                }}
+                            />
+                        )}
+
                         {/* 🌊 Surface Suggestions - iPhone-style swipeable cards */}
-                        {surfaceSuggestions.length > 0 && !dailyDelta && (
+                        {surfaceSuggestions.length > 0 && !dailyDelta && !calendarProposal && (
                             <Animated.View 
                                 entering={FadeInUp.delay(300)} 
                                 style={[styles.surfaceCarouselWrapper, surfaceCardsAnimatedStyle]}
@@ -954,6 +1241,11 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                         scrollEventThrottle={16}
                         keyboardShouldPersistTaps="handled"
                     >
+                        {/* 🔗 Phase 6: Batch Synthesis Header */}
+                        {activeBatchContext && (
+                            <BatchSynthesisHeader context={activeBatchContext} />
+                        )}
+                        
                         {messages.map((msg) => (
                             <MessageBubble
                                 key={msg.id}

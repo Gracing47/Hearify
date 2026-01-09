@@ -4,12 +4,15 @@
  */
 
 import { getAllConversations, type Conversation } from '@/services/ConversationService';
+import { useGoogleCalendarAuth } from '@/services/GoogleAuthService';
+import { CALENDAR_STATUS_LABELS } from '@/store/calendarStore';
 import { useContextStore } from '@/store/contextStore';
 import { useConversationStore } from '@/store/conversation';
 import * as Haptics from '@/utils/haptics';
 import { BlurView } from 'expo-blur';
 import React, { useEffect, useState } from 'react';
 import {
+    ActivityIndicator,
     Dimensions,
     Modal,
     Platform,
@@ -226,6 +229,10 @@ export function SideMenu({ isOpen, onClose, onResumeSession }: SideMenuProps) {
                     {/* Footer */}
                     <View style={[styles.menuFooter, { paddingBottom: insets.bottom + 20 }]}>
                         <View style={styles.divider} />
+                        
+                        {/* 🗓️ Calendar Connection (Q10C) */}
+                        <CalendarConnectionItem />
+                        
                         <TouchableOpacity
                             style={styles.settingsItem}
                             activeOpacity={0.7}
@@ -267,6 +274,58 @@ function getRelativeTime(date: Date): string {
     if (diffDays < 7) return `${diffDays}d ago`;
     
     return date.toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
+}
+
+// 🗓️ Calendar Connection Item (Q10C)
+function CalendarConnectionItem() {
+    const { status, isLoading, isConnected, connect, disconnect } = useGoogleCalendarAuth();
+    const statusLabel = CALENDAR_STATUS_LABELS[status];
+
+    const handlePress = async () => {
+        Haptics.light();
+        
+        if (isConnected) {
+            // Disconnect
+            await disconnect();
+        } else {
+            // Connect
+            await connect();
+        }
+    };
+
+    const getStatusColor = () => {
+        switch (status) {
+            case 'connected': return '#34d399';
+            case 'expired': return '#fbbf24';
+            case 'error': return '#f87171';
+            default: return 'rgba(255, 255, 255, 0.4)';
+        }
+    };
+
+    return (
+        <TouchableOpacity 
+            style={styles.settingsItem} 
+            activeOpacity={0.7}
+            onPress={handlePress}
+            disabled={isLoading}
+        >
+            <Text style={styles.menuItemIcon}>📅</Text>
+            <View style={styles.calendarItemContent}>
+                <Text style={styles.settingsLabel}>Google Kalender</Text>
+                <View style={styles.calendarStatusRow}>
+                    <View style={[styles.statusDot, { backgroundColor: getStatusColor() }]} />
+                    <Text style={styles.calendarStatus}>{statusLabel}</Text>
+                </View>
+            </View>
+            {isLoading ? (
+                <ActivityIndicator size="small" color="rgba(255,255,255,0.5)" />
+            ) : (
+                <Text style={styles.calendarAction}>
+                    {isConnected ? 'Trennen' : 'Verbinden'}
+                </Text>
+            )}
+        </TouchableOpacity>
+    );
 }
 
 // Burger Icon Component for Header
@@ -440,6 +499,31 @@ const styles = StyleSheet.create({
     currentSessionBadgeText: {
         fontSize: 8,
         color: '#6366f1',
+    },
+    
+    // 🗓️ Calendar Connection Styles (Q10C)
+    calendarItemContent: {
+        flex: 1,
+    },
+    calendarStatusRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginTop: 2,
+    },
+    statusDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        marginRight: 6,
+    },
+    calendarStatus: {
+        fontSize: 11,
+        color: '#888',
+    },
+    calendarAction: {
+        fontSize: 12,
+        color: '#6366f1',
+        fontWeight: '600',
     },
     
     // Burger Button

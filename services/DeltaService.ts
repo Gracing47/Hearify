@@ -31,19 +31,26 @@ export interface DailyDelta {
 
 const DELTA_PROMPT = `You are an intelligent reflection engine for Hearify, a cognitive operating system.
 
-Given the user's thoughts from the past 24 hours, generate a strategic daily summary using the GFF Framework (Goals, Feelings, Facts).
+Given the user's thoughts from the past 24 hours AND their calendar context, generate a strategic daily summary using the GFF Framework (Goals, Feelings, Facts).
 
 YOUR TASK:
-Analyze the thoughts and create a synthesis that:
+Analyze the thoughts and calendar to create a synthesis that:
 1. Identifies the primary GOAL focus (what they're working toward)
 2. Counts key FACTS recorded (insights, learnings, data points)
 3. Assesses FEELINGS state (energy, friction, motivation)
-4. Suggests strategic adjustments if needed
+4. Considers CALENDAR context (meetings, busy hours, free slots)
+5. Suggests strategic adjustments if needed
+
+CALENDAR AWARENESS (Q8B Integration):
+- Use calendar data as a FACT to inform planning
+- If morning is free but user has afternoon meetings → suggest focused work AM
+- If user recorded a goal but calendar is packed → flag friction
+- If next meeting is soon → recommend wrapping up current task
 
 RESPONSE FORMAT (strict JSON):
 {
-  "summary": "Today you focused on [Goal: X]. You recorded Y [Facts] regarding Z, but your [Feelings] suggest A. Shall we adjust the plan for tomorrow?",
-  "highlights": ["Primary goal: X", "Y facts captured", "Energy: high/low", "Friction detected in: Z"],
+  "summary": "Today you focused on [Goal: X]. You recorded Y [Facts] regarding Z, but your [Feelings] suggest A. Your calendar shows B. Consider C.",
+  "highlights": ["Primary goal: X", "Y facts captured", "Energy: high/low", "Calendar: Z meetings", "Recommendation: ..."],
   "mood": "analytical",
   "gffBreakdown": {
     "goals": 3,
@@ -52,7 +59,8 @@ RESPONSE FORMAT (strict JSON):
     "primaryGoal": "Become top AM at Google",
     "dominantFeeling": "motivated",
     "keyInsight": "Best work happens in morning"
-  }
+  },
+  "calendarInsight": "Morning free until 14:00 - ideal for deep work"
 }
 
 MOOD CLASSIFICATION:
@@ -66,6 +74,8 @@ GFF SYNTHESIS RULES:
 2. If feelings show friction: Suggest goal adjustment or break
 3. If facts dominate: User is learning → validate progress
 4. If no clear goal detected: Suggest defining one
+5. If calendar is packed: Acknowledge constraints, suggest realistic scope
+6. If calendar has free slots: Recommend high-priority goal for that window
 
 Be strategic, concise, and actionable. This is JARVIS, not a passive journal.`;
 
@@ -125,8 +135,22 @@ export async function generateDelta(targetDate: Date = new Date()): Promise<Dail
     );
     const topClusters = (clustersResult.rows || []).map((r: any) => r.cluster_label).filter(Boolean);
 
-    // Generate summary with AI (pass GFF counts for context)
-    const aiResult = await callDeepSeekDelta(thoughtsText, gffCounts);
+    // Q8B: Get calendar context if connected
+    let calendarFacts: CalendarFacts | undefined;
+    try {
+        const { getCalendarFactsForDelta } = await import('./GoogleCalendarService');
+        const { useCalendarStore } = await import('../store/calendarStore');
+        
+        if (useCalendarStore.getState().status === 'connected') {
+            calendarFacts = getCalendarFactsForDelta();
+            console.log('[DeltaService] Calendar context added:', calendarFacts);
+        }
+    } catch (error) {
+        console.log('[DeltaService] Calendar not available for Delta');
+    }
+
+    // Generate summary with AI (pass GFF counts + calendar for context)
+    const aiResult = await callDeepSeekDelta(thoughtsText, gffCounts, calendarFacts);
 
     if (!aiResult) {
         console.warn('[DeltaService] AI generation failed');
@@ -210,9 +234,17 @@ export async function generateYesterdayDelta(): Promise<DailyDelta | null> {
 
 type MoodType = 'analytical' | 'reflective' | 'creative' | 'mixed';
 
+interface CalendarFacts {
+    totalEvents: number;
+    nextEvent: { title: string; startsIn: number } | null;
+    busyHours: number;
+    hasMorningFree: boolean;
+}
+
 async function callDeepSeekDelta(
     thoughts: string,
-    gffCounts?: { goals: number; facts: number; feelings: number }
+    gffCounts?: { goals: number; facts: number; feelings: number },
+    calendarFacts?: CalendarFacts
 ): Promise<{ summary: string; highlights: string[]; mood: MoodType; gffBreakdown?: any } | null> {
     try {
         const apiKey = await getDeepSeekKey();
@@ -225,6 +257,21 @@ async function callDeepSeekDelta(
             ? `\n\n[GFF COUNTS] Goals: ${gffCounts.goals}, Facts: ${gffCounts.facts}, Feelings: ${gffCounts.feelings}`
             : '';
 
+        // Q8B: Add calendar context for smarter Delta generation
+        let calendarContext = '';
+        if (calendarFacts) {
+            const parts = [];
+            parts.push(`Termine heute: ${calendarFacts.totalEvents}`);
+            parts.push(`Geblockte Stunden: ${calendarFacts.busyHours}h`);
+            parts.push(`Vormittag frei: ${calendarFacts.hasMorningFree ? 'Ja' : 'Nein'}`);
+            
+            if (calendarFacts.nextEvent) {
+                parts.push(`Nächster Termin: "${calendarFacts.nextEvent.title}" in ${calendarFacts.nextEvent.startsIn} Minuten`);
+            }
+            
+            calendarContext = `\n\n[KALENDER KONTEXT] ${parts.join(' | ')}`;
+        }
+
         const response = await fetch(DEEPSEEK_API_URL, {
             method: 'POST',
             headers: {
@@ -235,7 +282,7 @@ async function callDeepSeekDelta(
                 model: 'deepseek-chat',
                 messages: [
                     { role: 'system', content: DELTA_PROMPT },
-                    { role: 'user', content: `Here are the thoughts from yesterday:${gffContext}\n\n${thoughts}` }
+                    { role: 'user', content: `Here are the thoughts from yesterday:${gffContext}${calendarContext}\n\n${thoughts}` }
                 ],
                 temperature: 0.7,
                 max_tokens: 500

@@ -6,6 +6,7 @@ import { ActivityIndicator, StyleSheet, Text, useColorScheme, View } from 'react
 import 'react-native-reanimated';
 
 import { initDatabase } from '../db';
+import { validateAndRefreshIfNeeded } from '../services/GoogleAuthService';
 import { NotificationService } from '../services/NotificationService';
 import { getProfileDbName, useProfileStore } from '../store/profile';
 
@@ -35,6 +36,11 @@ export default function RootLayout() {
   useEffect(() => {
     loadProfiles().catch(console.error);
     NotificationService.requestPermissions().catch(console.error);
+    
+    // Q10C: Proactive calendar token validation on app start
+    validateAndRefreshIfNeeded().catch(err => {
+      console.log('[Auth] Calendar validation skipped:', err.message);
+    });
   }, []);
 
   // 2. Database Sync

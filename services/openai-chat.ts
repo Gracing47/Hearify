@@ -103,9 +103,17 @@ export interface Snippet {
     hashtags?: string;
 }
 
+export interface CalendarProposalData {
+    action: 'create_event';
+    title: string;
+    startTime: string;
+    duration: number;
+}
+
 export interface ChatResult {
     snippets: Snippet[];
     response: string;
+    calendarProposal?: CalendarProposalData | null;
 }
 
 /**
@@ -139,7 +147,21 @@ export async function processWithGPT(
             ? `\n\n[NEURAL CONTEXT]\n${context.join('\n')}`
             : '';
 
-        const fullContext = sessionContext + contextStr;
+        // === ACTION CATALYST: Calendar-aware context injection ===
+        let catalystContext = '';
+        try {
+            const { generateCatalystContext } = await import('./ActionCatalystService');
+            const { useCalendarStore } = await import('../store/calendarStore');
+            
+            if (useCalendarStore.getState().status === 'connected') {
+                const catalyst = generateCatalystContext();
+                catalystContext = catalyst.systemPromptAddition;
+            }
+        } catch (err) {
+            // Calendar not connected or service unavailable
+        }
+
+        const fullContext = sessionContext + contextStr + catalystContext;
 
         const recentHistory = history.slice(-10);
 
@@ -207,11 +229,12 @@ export async function processWithGPT(
         }
 
         // Extract structured data
-        const { cleanResponse, snippets } = extractStructuredData(rawContent);
+        const { cleanResponse, snippets, calendarProposal } = extractStructuredData(rawContent);
 
         return {
             snippets,
             response: cleanResponse,
+            calendarProposal, // NEW: Pass through any calendar proposals
         };
     } catch (error) {
         console.error('[GPT-4o-mini] Error:', error);
@@ -221,22 +244,52 @@ export async function processWithGPT(
 
 /**
  * Robust JSON extraction from the AI's response text
+ * Also extracts calendar proposals from Action Catalyst
  */
-function extractStructuredData(text: string): { cleanResponse: string, snippets: Snippet[] } {
-    const memoryStart = text.indexOf('[[MEMORY_START]]');
-    const memoryEnd = text.indexOf('[[MEMORY_END]]');
+function extractStructuredData(text: string): { 
+    cleanResponse: string; 
+    snippets: Snippet[]; 
+    calendarProposal?: CalendarProposalData | null;
+} {
+    let cleanResponse = text;
+    let calendarProposal: CalendarProposalData | null = null;
+    
+    // === Extract Calendar Proposal (Action Catalyst) ===
+    const proposalMatch = text.match(
+        /\[\[CALENDAR_PROPOSAL\]\]([\s\S]*?)\[\[CALENDAR_PROPOSAL_END\]\]/
+    );
+    
+    if (proposalMatch) {
+        cleanResponse = cleanResponse.replace(proposalMatch[0], '').trim();
+        
+        try {
+            const proposalJson = proposalMatch[1].trim();
+            const parsed = JSON.parse(proposalJson);
+            
+            if (parsed.action === 'create_event' && parsed.title && parsed.startTime) {
+                calendarProposal = parsed;
+                console.log('[GPT-4o-mini] Calendar proposal extracted:', parsed.title);
+            }
+        } catch (e) {
+            console.warn('[GPT-4o-mini] Calendar proposal parse failed:', e);
+        }
+    }
+    
+    // === Extract Memory Snippets ===
+    const memoryStart = cleanResponse.indexOf('[[MEMORY_START]]');
+    const memoryEnd = cleanResponse.indexOf('[[MEMORY_END]]');
 
     if (memoryStart === -1) {
-        return { cleanResponse: text, snippets: [] };
+        return { cleanResponse, snippets: [], calendarProposal };
     }
 
-    const cleanResponse = text.substring(0, memoryStart).trim();
+    const responseWithoutMemory = cleanResponse.substring(0, memoryStart).trim();
 
     let jsonStr = '';
     if (memoryEnd !== -1) {
-        jsonStr = text.substring(memoryStart + 16, memoryEnd).trim();
+        jsonStr = cleanResponse.substring(memoryStart + 16, memoryEnd).trim();
     } else {
-        jsonStr = text.substring(memoryStart + 16).trim();
+        jsonStr = cleanResponse.substring(memoryStart + 16).trim();
     }
 
     try {
@@ -244,8 +297,9 @@ function extractStructuredData(text: string): { cleanResponse: string, snippets:
         const parsed = JSON.parse(sanitizedJson);
 
         return {
-            cleanResponse,
-            snippets: Array.isArray(parsed.snippets) ? parsed.snippets : []
+            cleanResponse: responseWithoutMemory,
+            snippets: Array.isArray(parsed.snippets) ? parsed.snippets : [],
+            calendarProposal,
         };
     } catch (e) {
         console.warn('[GPT-4o-mini] JSON Parse failed, using fallback regex');
@@ -266,6 +320,83 @@ function extractStructuredData(text: string): { cleanResponse: string, snippets:
             }
         }
 
-        return { cleanResponse, snippets };
+        return { cleanResponse: responseWithoutMemory, snippets, calendarProposal };
+    }
+}
+
+/**
+ * Process batch synthesis with custom system prompt
+ * 
+ * Phase 6: Batch Reflect - Multi-snippet analysis
+ * Uses the synthesis-specific system prompt instead of HEARIFY_SYSTEM_PROMPT
+ */
+export async function processWithBatchSynthesis(
+    systemPrompt: string,
+    userMessage: string,
+    conversationId?: number | null
+): Promise<{ response: string }> {
+    const apiKey = await getOpenAIKey();
+    if (!apiKey) throw new Error('OpenAI API key not configured');
+
+    const startTime = Date.now();
+
+    try {
+        // Add time context
+        const now = new Date();
+        const timePrompt = `\n[CURRENT TIME] ${now.toLocaleString('de-DE', {
+            weekday: 'long', year: 'numeric', month: 'long',
+            day: 'numeric', hour: '2-digit', minute: '2-digit'
+        })}`;
+
+        // === SAVE USER MESSAGE TO DB ===
+        if (conversationId) {
+            const { addMessage } = await import('./ConversationService');
+            await addMessage(conversationId, {
+                role: 'user',
+                content: userMessage,
+            });
+        }
+
+        const response = await fetch(API_URL, {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${apiKey}`,
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                model: MODEL,
+                messages: [
+                    { role: 'system', content: systemPrompt + timePrompt },
+                    { role: 'user', content: userMessage }
+                ],
+                temperature: 0.7,
+                max_tokens: 1200, // Higher limit for synthesis
+            }),
+        });
+
+        if (!response.ok) {
+            const error = await response.text();
+            throw new Error(`OpenAI API error: ${error}`);
+        }
+
+        const result = await response.json();
+        const content = result.choices[0].message.content;
+
+        const elapsed = Date.now() - startTime;
+        console.log(`[BatchSynthesis] Response in ${elapsed}ms`);
+
+        // === SAVE ASSISTANT MESSAGE TO DB ===
+        if (conversationId) {
+            const { addMessage } = await import('./ConversationService');
+            await addMessage(conversationId, {
+                role: 'assistant',
+                content,
+            });
+        }
+
+        return { response: content };
+    } catch (error) {
+        console.error('[BatchSynthesis] Error:', error);
+        throw error;
     }
 }

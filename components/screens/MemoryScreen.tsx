@@ -6,11 +6,30 @@
  * - Time-Stream (SectionList grouped by date)
  * - Shape Icons (Hexagon/Diamond/Circle for type identity)
  * - Time-Travel Navigation (Tap -> Focus in Horizon)
+ * 
+ * v2.1: Smart Discovery Panel Integration
+ * - SQL-based multi-filter (GFF intersection, date range, hashtags)
+ * - Hybrid scoring (0.7 semantic + 0.3 type match)
+ * - Empty state suggestions
+ * 
+ * v2.2: Batch Synthesis (Phase 6)
+ * - Multi-select mode with long-press activation
+ * - Floating Action Bar for batch reflect
  */
 
-import { getAllSnippets, updateSnippetImportance } from '@/db';
+import { BatchSelectFAB } from '@/components/BatchSelectFAB';
+import { SmartFilterPanel } from '@/components/SmartFilterPanel';
+import { updateSnippetImportance } from '@/db';
 import { Snippet } from '@/db/schema';
+import { useFilteredSnippets } from '@/hooks/useFilteredSnippets';
 import { getAllConversations, type Conversation } from '@/services/ConversationService';
+import { resumeSessionInStore } from '@/services/SessionRestorationService';
+import {
+    useChronicleActions,
+    useChronicleStore,
+    useChronicleUI,
+    useSelectionMode
+} from '@/store/chronicleStore';
 import { useContextStore } from '@/store/contextStore';
 import { useLensStore } from '@/store/lensStore';
 import { Ionicons } from '@expo/vector-icons';
@@ -23,13 +42,14 @@ import {
     SectionList,
     StyleSheet,
     Text,
-    TextInput,
     View
 } from 'react-native';
 import { TouchableOpacity } from 'react-native-gesture-handler';
 import Animated, {
     FadeIn,
-    FadeInUp
+    FadeInUp,
+    useAnimatedStyle,
+    withTiming
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -392,11 +412,21 @@ const ActionButton = ({
     </TouchableOpacity>
 );
 
+// ═══════════════════════════════════════════════════════════════════
+// TIMELINE ITEM WITH MULTI-SELECT SUPPORT (Phase 6)
+// ═══════════════════════════════════════════════════════════════════
+
 const TimelineItem = React.memo(({ snippet, index, isFirst, isLast, onPress, onRefresh }: TimelineItemProps) => {
     const config = TYPE_CONFIG[snippet.type as keyof typeof TYPE_CONFIG] || TYPE_CONFIG.fact;
     const timeStr = new Date(snippet.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const router = useRouter();
     const { setMode } = useLensStore();
+    
+    // Multi-Select State (Phase 6)
+    const isSelectionMode = useSelectionMode();
+    const isSelected = useChronicleStore((s) => s.selectedSnippetIds.has(snippet.id));
+    const toggleSelection = useChronicleStore((s) => s.toggleSnippetSelection);
+    const canSelectMore = useChronicleStore((s) => s.canSelectMore);
 
     const handleStar = useCallback(async () => {
         try {
@@ -439,13 +469,56 @@ const TimelineItem = React.memo(({ snippet, index, isFirst, isLast, onPress, onR
         console.log(`[Chronicle] Reflect: Opening Orbit with snippet ${snippet.id}`);
     }, [snippet.content, snippet.id, router]);
 
+    // Long-Press Handler for Multi-Select (Phase 6)
+    const handleLongPress = useCallback(() => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        const success = toggleSelection(snippet.id);
+        if (!success) {
+            // Selection limit reached
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        }
+    }, [snippet.id, toggleSelection]);
+
+    // Tap Handler (respects selection mode)
+    const handlePress = useCallback(() => {
+        if (isSelectionMode) {
+            // In selection mode: toggle selection
+            const wasSelected = isSelected;
+            const success = toggleSelection(snippet.id);
+            
+            if (success) {
+                Haptics.impactAsync(wasSelected 
+                    ? Haptics.ImpactFeedbackStyle.Light  // Deselect: softer
+                    : Haptics.ImpactFeedbackStyle.Medium // Select: stronger
+                );
+            } else {
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+            }
+        } else {
+            // Normal mode: navigate
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            onPress();
+        }
+    }, [isSelectionMode, isSelected, snippet.id, toggleSelection, onPress]);
+
+    // Animated selection glow
+    const selectionStyle = useAnimatedStyle(() => ({
+        borderWidth: withTiming(isSelected ? 2 : 1, { duration: 150 }),
+        borderColor: withTiming(
+            isSelected ? config.color : config.borderColor, 
+            { duration: 150 }
+        ),
+        shadowColor: config.color,
+        shadowOpacity: withTiming(isSelected ? 0.4 : 0, { duration: 200 }),
+        shadowRadius: withTiming(isSelected ? 8 : 0, { duration: 200 }),
+    }));
+
     return (
         <Pressable
             style={styles.timelineItem}
-            onPress={() => {
-                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                onPress();
-            }}
+            onPress={handlePress}
+            onLongPress={handleLongPress}
+            delayLongPress={400}
         >
             {/* Timeline Line */}
             <View style={styles.timelineLine}>
@@ -457,7 +530,25 @@ const TimelineItem = React.memo(({ snippet, index, isFirst, isLast, onPress, onR
             </View>
 
             {/* Content Card */}
-            <View style={[styles.timelineCard, { borderColor: config.borderColor, backgroundColor: config.bgColor }]}>
+            <Animated.View style={[
+                styles.timelineCard, 
+                { backgroundColor: config.bgColor },
+                selectionStyle
+            ]}>
+                {/* Selection Checkbox Overlay */}
+                {isSelectionMode && (
+                    <View style={styles.checkboxOverlay}>
+                        <View style={[
+                            styles.checkbox,
+                            isSelected && { backgroundColor: config.color, borderColor: config.color }
+                        ]}>
+                            {isSelected && (
+                                <Ionicons name="checkmark" size={14} color="#000" />
+                            )}
+                        </View>
+                    </View>
+                )}
+                
                 <View style={styles.timelineCardHeader}>
                     <Text style={[styles.timelineType, { color: config.color }]}>{config.label}</Text>
                     <Text style={styles.timelineTime}>{timeStr}</Text>
@@ -486,11 +577,12 @@ const TimelineItem = React.memo(({ snippet, index, isFirst, isLast, onPress, onR
 
                     {/* View button hidden - double-tap card to view in Horizon */}
                 </View>
-            </View>
+            </Animated.View>
         </Pressable>
     );
 }, (prevProps, nextProps) => {
     // Custom comparison - only re-render if these change
+    // Note: Selection state handled by Zustand selectors, not props
     return prevProps.snippet.id === nextProps.snippet.id &&
         prevProps.snippet.importance === nextProps.snippet.importance &&
         prevProps.isFirst === nextProps.isFirst &&
@@ -508,22 +600,28 @@ interface Section {
 
 export function MemoryScreen() {
     const insets = useSafeAreaInsets();
-    const [snippets, setSnippets] = useState<Snippet[]>([]);
     const [conversations, setConversations] = useState<Conversation[]>([]);
     const [expandedConvId, setExpandedConvId] = useState<number | null>(null);
     const [refreshing, setRefreshing] = useState(false);
-    const [filter, setFilter] = useState<'all' | 'fact' | 'feeling' | 'goal'>('all');
-    const [searchQuery, setSearchQuery] = useState('');
-    const [isSearching, setIsSearching] = useState(false);
+    
+    // Smart Filter Panel integration
+    const { resultCount, isLoading: isFilterLoading } = useChronicleUI();
+    const { resetFilters } = useChronicleActions();
+    
+    // SQL-based filtered snippets with hybrid scoring
+    const { 
+        snippets, 
+        results: filteredResults,
+        count, 
+        topHashtags,
+        emptySuggestions,
+        totalCount,
+        refresh: refreshSnippets,
+        isLoading,
+        queryTimeMs 
+    } = useFilteredSnippets();
 
     const nodeRefreshTrigger = useContextStore(state => state.nodeRefreshTrigger);
-
-    const loadSnippets = useCallback(async () => {
-        console.log('[Chronicle] Loading snippets...');
-        const data = await getAllSnippets();
-        console.log('[Chronicle] Loaded', data.length, 'snippets');
-        setSnippets(data);
-    }, []);
 
     const loadConversations = useCallback(async () => {
         console.log('[Chronicle] Loading conversations...');
@@ -534,44 +632,20 @@ export function MemoryScreen() {
 
     useEffect(() => {
         console.log('[Chronicle] Refresh triggered, nodeRefreshTrigger:', nodeRefreshTrigger);
-        loadSnippets();
+        refreshSnippets();
         loadConversations();
-    }, [nodeRefreshTrigger, loadSnippets, loadConversations]);
+    }, [nodeRefreshTrigger, refreshSnippets, loadConversations]);
 
     const onRefresh = async () => {
         setRefreshing(true);
-        await Promise.all([loadSnippets(), loadConversations()]);
+        await Promise.all([refreshSnippets(), loadConversations()]);
         setRefreshing(false);
     };
 
-    // 🔍 Semantic Search Handler
-    const handleSearch = useCallback(async (query: string) => {
-        setSearchQuery(query);
-        
-        if (!query.trim()) {
-            // Empty search: reload all snippets
-            await loadSnippets();
-            setIsSearching(false);
-            return;
-        }
-
-        setIsSearching(true);
-        try {
-            // Hybrid search: combines text + semantic similarity
-            const results = await hybridSearch(query, 50);
-            setSnippets(results as Snippet[]);
-            console.log(`[Chronicle] Search results: ${results.length} snippets for "${query}"`);
-        } catch (error) {
-            console.error('[Chronicle] Search failed:', error);
-            await loadSnippets(); // Fallback to all snippets
-        } finally {
-            setIsSearching(false);
-        }
-    }, [loadSnippets]);
-
-    const filteredSnippets = filter === 'all'
-        ? snippets
-        : snippets.filter(s => s.type === filter);
+    // Use filtered results for display (includes soft matches with reduced opacity)
+    const filteredSnippets = useMemo(() => {
+        return filteredResults.map(r => r.snippet);
+    }, [filteredResults]);
 
     // Group snippets by date + prepend Conversations section
     const sections: Section[] = useMemo(() => {
@@ -703,70 +777,55 @@ export function MemoryScreen() {
                         {/* Insight Header */}
                         <InsightHeader snippets={snippets} stats={stats} />
 
-                        {/* 🔍 Search Bar */}
-                        <Animated.View entering={FadeInUp.delay(150)} style={styles.searchContainer}>
-                            <Ionicons 
-                                name={isSearching ? "hourglass-outline" : "search-outline"} 
-                                size={18} 
-                                color="rgba(255,255,255,0.5)" 
-                                style={styles.searchIcon}
+                        {/* 🎨 Smart Filter Panel (Zone A/B/C) */}
+                        <Animated.View entering={FadeInUp.delay(150)}>
+                            <SmartFilterPanel 
+                                topHashtags={topHashtags}
+                                resultCount={count}
                             />
-                            <TextInput
-                                style={styles.searchInput}
-                                placeholder="Semantic search..."
-                                placeholderTextColor="rgba(255,255,255,0.3)"
-                                value={searchQuery}
-                                onChangeText={handleSearch}
-                                autoCapitalize="none"
-                                autoCorrect={false}
-                                returnKeyType="search"
-                            />
-                            {searchQuery.length > 0 && (
-                                <Pressable onPress={() => handleSearch('')} hitSlop={8}>
-                                    <Ionicons name="close-circle" size={18} color="rgba(255,255,255,0.4)" />
-                                </Pressable>
-                            )}
-                        </Animated.View>
-
-                        {/* Filter Pills */}
-                        <Animated.View entering={FadeInUp.delay(200)} style={styles.filterRow}>
-                            {(['all', 'goal', 'feeling', 'fact'] as const).map((f) => {
-                                const config = f !== 'all' ? TYPE_CONFIG[f] : null;
-                                return (
-                                    <Pressable
-                                        key={f}
-                                        style={[
-                                            styles.filterPill,
-                                            filter === f && styles.filterPillActive,
-                                            filter === f && config && { borderColor: config.color, backgroundColor: `${config.color}18` }
-                                        ]}
-                                        onPress={() => {
-                                            Haptics.selectionAsync();
-                                            setFilter(f);
-                                        }}
-                                    >
-                                        {config && <ShapeIcon type={f} size={12} />}
-                                        <Text style={[
-                                            styles.filterPillText,
-                                            filter === f && styles.filterPillTextActive,
-                                            filter === f && config && { color: config.color }
-                                        ]}>
-                                            {f === 'all' ? 'All' : f.charAt(0).toUpperCase() + f.slice(1) + 's'}
-                                        </Text>
-                                    </Pressable>
-                                );
-                            })}
                         </Animated.View>
                     </>
                 )}
                 ListEmptyComponent={() => (
                     <Animated.View entering={FadeIn} style={styles.emptyState}>
                         <Text style={styles.emptyIcon}>🧠</Text>
-                        <Text style={styles.emptyTitle}>No memories yet</Text>
-                        <Text style={styles.emptySubtitle}>Start a conversation to capture thoughts</Text>
+                        <Text style={styles.emptyTitle}>
+                            {totalCount === 0 ? 'No memories yet' : 'Keine Treffer'}
+                        </Text>
+                        <Text style={styles.emptySubtitle}>
+                            {totalCount === 0 
+                                ? 'Start a conversation to capture thoughts' 
+                                : 'Versuche einen anderen Filter'}
+                        </Text>
+                        
+                        {/* Empty State Suggestions */}
+                        {emptySuggestions.length > 0 && (
+                            <View style={styles.emptySuggestions}>
+                                {emptySuggestions.map((suggestion, index) => (
+                                    <Pressable 
+                                        key={index}
+                                        style={styles.suggestionButton}
+                                        onPress={() => {
+                                            Haptics.selectionAsync();
+                                            useChronicleStore.getState().applyFilterSuggestion(suggestion);
+                                        }}
+                                    >
+                                        <Ionicons 
+                                            name={suggestion.type === 'extend_date' ? 'calendar-outline' : 'options-outline'} 
+                                            size={14} 
+                                            color="#08d0ff" 
+                                        />
+                                        <Text style={styles.suggestionText}>{suggestion.label}</Text>
+                                    </Pressable>
+                                ))}
+                            </View>
+                        )}
                     </Animated.View>
                 )}
             />
+            
+            {/* Batch Select FAB (Phase 6) */}
+            <BatchSelectFAB />
         </View>
     );
 }
@@ -1178,5 +1237,46 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: '700',
         color: '#818cf8',
+    },
+    
+    // Empty State Suggestions
+    emptySuggestions: {
+        marginTop: 20,
+        gap: 10,
+        alignItems: 'center',
+    },
+    suggestionButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        borderRadius: 12,
+        backgroundColor: 'rgba(8, 208, 255, 0.08)',
+        borderWidth: 1,
+        borderColor: 'rgba(8, 208, 255, 0.2)',
+    },
+    suggestionText: {
+        fontSize: 13,
+        fontWeight: '500',
+        color: '#08d0ff',
+    },
+    
+    // Multi-Select Checkbox (Phase 6)
+    checkboxOverlay: {
+        position: 'absolute',
+        top: 8,
+        right: 8,
+        zIndex: 10,
+    },
+    checkbox: {
+        width: 22,
+        height: 22,
+        borderRadius: 11,
+        borderWidth: 2,
+        borderColor: 'rgba(255, 255, 255, 0.3)',
+        backgroundColor: 'rgba(0, 0, 0, 0.5)',
+        alignItems: 'center',
+        justifyContent: 'center',
     },
 });
