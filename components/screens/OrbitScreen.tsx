@@ -54,7 +54,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { processWithBatchSynthesis, processWithGPT } from '@/services/openai-chat';
+import { CalendarProposalData, processWithBatchSynthesis, processWithGPT } from '@/services/openai-chat';
 import { getSuggestionColor, getSuggestionIcon, getSurfaceSuggestions, type SurfaceSuggestion } from '@/services/SurfaceSuggestionService';
 import * as Haptics from '@/utils/haptics';
 
@@ -66,7 +66,10 @@ import { usePredictionStore, type Prediction } from '@/store/predictionStore';
 
 // 🔗 Phase 6: Batch Synthesis
 import type { BatchContext } from '@/services/BatchSynthesisService';
+import { createEventProposal, EventProposal } from '@/services/GoogleCalendarService';
+import { useCalendarStore } from '@/store/calendarStore';
 import { usePendingBatchReflect, useSelectionActions } from '@/store/chronicleStore';
+import { CalendarProposalCard } from '../CalendarProposalCard';
 
 // 📐 Card dimensions for iPhone-style carousel
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -135,7 +138,7 @@ const MessageBubble = React.memo(({ msg, isAI }: { msg: any, isAI: boolean }) =>
  */
 const BatchSynthesisHeader = React.memo(({ context }: { context: BatchContext }) => {
     const { gffBreakdown, count, timeRange } = context;
-    
+
     // Format time span
     const formatTimeSpan = () => {
         const days = timeRange.spanDays;
@@ -155,7 +158,7 @@ const BatchSynthesisHeader = React.memo(({ context }: { context: BatchContext })
                 <Ionicons name="git-merge-outline" size={18} color="rgba(255, 255, 255, 0.8)" />
                 <Text style={batchStyles.title}>Batch-Synthese</Text>
             </View>
-            
+
             <View style={batchStyles.stats}>
                 <View style={batchStyles.statItem}>
                     <Text style={batchStyles.statValue}>{count}</Text>
@@ -167,7 +170,7 @@ const BatchSynthesisHeader = React.memo(({ context }: { context: BatchContext })
                     <Text style={batchStyles.statLabel}>Zeitraum</Text>
                 </View>
             </View>
-            
+
             <View style={batchStyles.gffRow}>
                 {gffBreakdown.goals > 0 && (
                     <View style={[batchStyles.gffBadge, { backgroundColor: 'rgba(74, 222, 128, 0.2)' }]}>
@@ -279,18 +282,18 @@ const ReflectionSuggester = ({ reflections, onSave, onDismiss }: {
                 activeOpacity={0.7}
             >
                 <View style={styles.reflectionToggleContent}>
-                    <Ionicons 
-                        name="bookmarks-outline" 
-                        size={16} 
-                        color="rgba(255, 255, 255, 0.6)" 
+                    <Ionicons
+                        name="bookmarks-outline"
+                        size={16}
+                        color="rgba(255, 255, 255, 0.6)"
                     />
                     <Text style={styles.reflectionToggleText}>
                         {reflections.length} {reflections.length === 1 ? 'Gedanke' : 'Gedanken'} zum Festhalten
                     </Text>
-                    <Ionicons 
-                        name={expanded ? "chevron-up" : "chevron-down"} 
-                        size={16} 
-                        color="rgba(255, 255, 255, 0.4)" 
+                    <Ionicons
+                        name={expanded ? "chevron-up" : "chevron-down"}
+                        size={16}
+                        color="rgba(255, 255, 255, 0.4)"
                     />
                 </View>
             </TouchableOpacity>
@@ -334,7 +337,7 @@ const ReflectionSuggester = ({ reflections, onSave, onDismiss }: {
                                 >
                                     <View style={styles.reflectionIconRow}>
                                         <Text style={styles.reflectionType}>{ref.type.toUpperCase()}</Text>
-                                        <TouchableOpacity 
+                                        <TouchableOpacity
                                             onPress={(e) => {
                                                 e.stopPropagation();
                                                 onDismiss(i);
@@ -363,7 +366,7 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     const [dailyDelta, setDailyDelta] = useState<DailyDelta | null>(null);
     const [deltaShown, setDeltaShown] = useState(true);
     const [deepThinking, setDeepThinking] = useState(false);
-    
+
     // 🎹 Animated keyboard height for smooth transitions
     const keyboardHeightAnim = useSharedValue(0);
 
@@ -431,10 +434,10 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     const handleSaveReflection = useCallback(async (reflection: any, index: number) => {
         try {
             Haptics.impactHeavy();
-            
+
             // === AMBIENT PERSISTENCE: Link snippet to current conversation ===
             const conversationId = useConversationStore.getState().currentConversationId;
-            
+
             const result = await saveSnippetWithDedup({
                 content: reflection.content,
                 type: reflection.type,
@@ -443,13 +446,13 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                 hashtags: reflection.hashtags,
                 conversationId, // 🆕 Link to session
             });
-            
+
             if (result.success) {
                 console.log('[Orbit] Snippet saved successfully:', result.snippetId);
-                
+
                 // Remove from staging
                 setProposedReflections(prev => prev.filter((_, i) => i !== index));
-                
+
                 // Trigger refresh (already called in saveSnippetWithDedup, but ensuring it fires)
                 useContextStore.getState().triggerNodeRefresh();
             }
@@ -489,7 +492,7 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     const isEmbedding = useConversationStore(state => state.isEmbedding);
     const isSpeaking = useConversationStore(state => state.isSpeaking);
     const resumeSession = useConversationStore(state => state.resumeSession);
-    
+
     // 🎯 Granular Processing State (Q3C)
     const processingState = useConversationStore(state => state.processingState);
     const setProcessingState = useConversationStore(state => state.setProcessingState);
@@ -673,8 +676,8 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
 
     // 🎨 Animated styles for smooth keyboard transitions
     const inputBarAnimatedStyle = useAnimatedStyle(() => {
-        const bottomOffset = keyboardHeightAnim.value > 0 
-            ? keyboardHeightAnim.value + 60 
+        const bottomOffset = keyboardHeightAnim.value > 0
+            ? keyboardHeightAnim.value + 60
             : insets.bottom + 20;
         return {
             bottom: bottomOffset,
@@ -688,8 +691,8 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     });
 
     const ghostSuggestionsAnimatedStyle = useAnimatedStyle(() => {
-        const bottomOffset = keyboardHeightAnim.value > 0 
-            ? keyboardHeightAnim.value + 130 
+        const bottomOffset = keyboardHeightAnim.value > 0
+            ? keyboardHeightAnim.value + 130
             : insets.bottom + 90;
         return {
             bottom: bottomOffset,
@@ -778,7 +781,7 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                 console.debug('[Orbit] Surface suggestions skipped:', e);
             }
         };
-        
+
         // Load after a short delay to not block initial render
         const timer = setTimeout(loadSuggestions, 1500);
         return () => clearTimeout(timer);
@@ -887,9 +890,9 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
             }
 
             setProcessingState('reasoning'); // 🎯 Q3C: "Denke nach..."
-            
+
             let calendarProposalData: CalendarProposalData | null | undefined = null;
-            
+
             if (deepThinking) {
                 setReasoning(true);
                 const result = await processWithReasoning(userText, context, history);
@@ -1062,12 +1065,12 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
     return (
         <View style={styles.container}>
             <View style={[styles.safeArea, { paddingTop: insets.top }]}>
-                <SideMenu 
-                    isOpen={menuOpen} 
-                    onClose={() => setMenuOpen(false)} 
-                    onResumeSession={async (conversationId: string) => {
+                <SideMenu
+                    isOpen={menuOpen}
+                    onClose={() => setMenuOpen(false)}
+                    onResumeSession={async (conversationId: number) => {
                         try {
-                            await resumeSession(parseInt(conversationId, 10));
+                            await resumeSession(conversationId);
                             Haptics.impactHeavy();
                         } catch (error) {
                             console.error('[Orbit] Failed to resume session:', error);
@@ -1100,7 +1103,7 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                 </View>
 
                 {messages.length === 0 ? (
-                    <Animated.View 
+                    <Animated.View
                         style={[
                             styles.welcomeContainer,
                             welcomeContainerAnimatedStyle
@@ -1138,8 +1141,8 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
 
                         {/* 🌊 Surface Suggestions - iPhone-style swipeable cards */}
                         {surfaceSuggestions.length > 0 && !dailyDelta && !calendarProposal && (
-                            <Animated.View 
-                                entering={FadeInUp.delay(300)} 
+                            <Animated.View
+                                entering={FadeInUp.delay(300)}
                                 style={[styles.surfaceCarouselWrapper, surfaceCardsAnimatedStyle]}
                             >
                                 <ScrollView
@@ -1164,7 +1167,7 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                                             entering={FadeInUp.delay(100 * index)}
                                             style={[
                                                 styles.surfaceCard,
-                                                { 
+                                                {
                                                     borderColor: `${getSuggestionColor(suggestion.type)}40`,
                                                     width: CARD_WIDTH,
                                                 }
@@ -1209,16 +1212,16 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                                         </Animated.View>
                                     ))}
                                 </ScrollView>
-                                
+
                                 {/* Page Indicators */}
                                 <View style={styles.surfacePageIndicators}>
                                     {surfaceSuggestions.map((_, i) => (
-                                        <Animated.View 
-                                            key={i} 
+                                        <Animated.View
+                                            key={i}
                                             style={[
                                                 styles.surfacePageDot,
                                                 i === activeSuggestionIndex && styles.surfacePageDotActive
-                                            ]} 
+                                            ]}
                                         />
                                     ))}
                                 </View>
@@ -1245,7 +1248,7 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                         {activeBatchContext && (
                             <BatchSynthesisHeader context={activeBatchContext} />
                         )}
-                        
+
                         {messages.map((msg) => (
                             <MessageBubble
                                 key={msg.id}
@@ -1320,62 +1323,62 @@ export function OrbitScreen({ layoutY, onOpenChronicle }: OrbitScreenProps) {
                         entering={FadeInUp.delay(300).springify()}
                         style={[styles.inputBar, inputBarAnimatedStyle]}
                     >
-                    {/* 🎤 Left: Voice Recording Button */}
-                    <TouchableOpacity
-                        style={[
-                            styles.micButton,
-                            appState === 'listening' && styles.micButtonActive,
-                            (appState === 'processing' || appState === 'speaking') && styles.micButtonDisabled
-                        ]}
-                        onPress={handleRecordPress}
-                        disabled={appState === 'processing' || appState === 'speaking'}
-                    >
-                        <Animated.View style={animatedButtonStyle}>
-                            {appState === 'listening' ? (
-                                <View style={styles.stopIcon} />
-                            ) : appState === 'processing' || appState === 'speaking' ? (
-                                <ActivityIndicator color="#fff" size="small" />
-                            ) : (
-                                <View style={styles.micCircle}>
-                                    <Text style={styles.micEmoji}>🎤</Text>
-                                </View>
-                            )}
-                        </Animated.View>
-                    </TouchableOpacity>
+                        {/* 🎤 Left: Voice Recording Button */}
+                        <TouchableOpacity
+                            style={[
+                                styles.micButton,
+                                appState === 'listening' && styles.micButtonActive,
+                                (appState === 'processing' || appState === 'speaking') && styles.micButtonDisabled
+                            ]}
+                            onPress={handleRecordPress}
+                            disabled={appState === 'processing' || appState === 'speaking'}
+                        >
+                            <Animated.View style={animatedButtonStyle}>
+                                {appState === 'listening' ? (
+                                    <View style={styles.stopIcon} />
+                                ) : appState === 'processing' || appState === 'speaking' ? (
+                                    <ActivityIndicator color="#fff" size="small" />
+                                ) : (
+                                    <View style={styles.micCircle}>
+                                        <Text style={styles.micEmoji}>🎤</Text>
+                                    </View>
+                                )}
+                            </Animated.View>
+                        </TouchableOpacity>
 
-                    <View style={styles.inputField}>
-                        <TextInput
-                            ref={textInputRef as any}
-                            style={[styles.textInput, { maxHeight: 100 }] as any}
-                            value={textInput}
-                            onChangeText={handleTextChange}
-                            onFocus={dismissSurfaceCards}
-                            placeholder={
-                                appState === 'listening' ? '🔴 Listening...' :
-                                    isTranscribing ? '✍️ Transcribing...' :
-                                        isEmbedding ? '🧠 Scanning Matrix...' :
-                                            isReasoning ? (deepThinking ? '💭 Deep thinking...' : '⚡ Thinking...') :
-                                                isSpeaking ? '🔊 Speaking...' :
-                                                    deepThinking ? 'Deep thinking enabled...' : 'Share your consciousness...'
-                            }
-                            placeholderTextColor="rgba(255, 255, 255, 0.4)"
-                            multiline
-                            editable={appState === 'idle'}
-                        />
-                    </View>
+                        <View style={styles.inputField}>
+                            <TextInput
+                                ref={textInputRef as any}
+                                style={[styles.textInput, { maxHeight: 100 }] as any}
+                                value={textInput}
+                                onChangeText={handleTextChange}
+                                onFocus={dismissSurfaceCards}
+                                placeholder={
+                                    appState === 'listening' ? '🔴 Listening...' :
+                                        isTranscribing ? '✍️ Transcribing...' :
+                                            isEmbedding ? '🧠 Scanning Matrix...' :
+                                                isReasoning ? (deepThinking ? '💭 Deep thinking...' : '⚡ Thinking...') :
+                                                    isSpeaking ? '🔊 Speaking...' :
+                                                        deepThinking ? 'Deep thinking enabled...' : 'Share your consciousness...'
+                                }
+                                placeholderTextColor="rgba(255, 255, 255, 0.4)"
+                                multiline
+                                editable={appState === 'idle'}
+                            />
+                        </View>
 
-                    {/* 🚀 Right: Send Text Button */}
-                    <TouchableOpacity
-                        style={[
-                            styles.sendButton,
-                            (!textInput.length || appState !== 'idle') && styles.sendButtonDisabled
-                        ]}
-                        onPress={handleSendText}
-                        disabled={!textInput.length || appState !== 'idle'}
-                    >
-                        <Text style={styles.sendIcon}>🚀</Text>
-                    </TouchableOpacity>
-                </Animated.View>
+                        {/* 🚀 Right: Send Text Button */}
+                        <TouchableOpacity
+                            style={[
+                                styles.sendButton,
+                                (!textInput.length || appState !== 'idle') && styles.sendButtonDisabled
+                            ]}
+                            onPress={handleSendText}
+                            disabled={!textInput.length || appState !== 'idle'}
+                        >
+                            <Text style={styles.sendIcon}>🚀</Text>
+                        </TouchableOpacity>
+                    </Animated.View>
                 </KeyboardAvoidingView>
             </View>
         </View>
@@ -1510,7 +1513,7 @@ const styles = StyleSheet.create({
         color: 'rgba(255, 255, 255, 0.7)',
         lineHeight: 20,
     },
-    
+
     // 🎠 iPhone-style Carousel
     surfaceCarouselWrapper: {
         width: '100%',
@@ -1732,14 +1735,7 @@ const styles = StyleSheet.create({
         width: 100,
         zIndex: 50,
     },
-    // 🧠 Sprint 1.1: ACE Integrated Styles
-    suggestionsWrapper: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        zIndex: 100,
-        paddingHorizontal: 16,
-    },
+
     stagedList: {
         position: 'absolute',
         bottom: 100, // Just above the input bar
@@ -1879,15 +1875,15 @@ const styles = StyleSheet.create({
         borderWidth: 1,
         borderColor: 'rgba(255, 255, 255, 0.06)',
     },
-    reflectionGoal: { 
+    reflectionGoal: {
         borderLeftWidth: 3,
         borderLeftColor: '#ffd54f',
     },
-    reflectionFeeling: { 
+    reflectionFeeling: {
         borderLeftWidth: 3,
         borderLeftColor: '#ff1f6d',
     },
-    reflectionFact: { 
+    reflectionFact: {
         borderLeftWidth: 3,
         borderLeftColor: '#08d0ff',
     },
@@ -1921,12 +1917,13 @@ const styles = StyleSheet.create({
         fontWeight: '600',
         opacity: 0.7,
     },
-    // Adjust ACE positions to avoid overlap
+    // 🧠 Sprint 1.1: ACE Integrated Styles - Adjusted to avoid overlap
     suggestionsWrapper: {
         position: 'absolute',
         bottom: 240,
         left: 0,
         right: 0,
         zIndex: 100,
+        paddingHorizontal: 16,
     },
 });

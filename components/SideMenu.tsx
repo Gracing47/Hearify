@@ -49,7 +49,7 @@ const menuItems: MenuItem[] = [
 interface SideMenuProps {
     isOpen: boolean;
     onClose: () => void;
-    onResumeSession?: (conversationId: string) => void;
+    onResumeSession?: (conversationId: number) => void;
 }
 
 export function SideMenu({ isOpen, onClose, onResumeSession }: SideMenuProps) {
@@ -57,7 +57,7 @@ export function SideMenu({ isOpen, onClose, onResumeSession }: SideMenuProps) {
     const activeScreen = useContextStore((state) => state.activeScreen);
     const setActiveScreen = useContextStore((state) => state.setActiveScreen);
     const currentConversationId = useConversationStore((state) => state.currentConversationId);
-    
+
     // Sessions state
     const [recentSessions, setRecentSessions] = useState<Conversation[]>([]);
     const [sessionsExpanded, setSessionsExpanded] = useState(true);
@@ -151,7 +151,7 @@ export function SideMenu({ isOpen, onClose, onResumeSession }: SideMenuProps) {
 
                     {/* 🕰️ Recent Sessions Section */}
                     <View style={styles.sessionsSection}>
-                        <TouchableOpacity 
+                        <TouchableOpacity
                             style={styles.sessionsSectionHeader}
                             onPress={() => {
                                 Haptics.light();
@@ -164,10 +164,10 @@ export function SideMenu({ isOpen, onClose, onResumeSession }: SideMenuProps) {
                                 {sessionsExpanded ? '▼' : '▶'}
                             </Text>
                         </TouchableOpacity>
-                        
+
                         {sessionsExpanded && (
-                            <ScrollView 
-                                style={styles.sessionsScrollView} 
+                            <ScrollView
+                                style={styles.sessionsScrollView}
                                 showsVerticalScrollIndicator={false}
                             >
                                 {recentSessions.length === 0 ? (
@@ -179,7 +179,7 @@ export function SideMenu({ isOpen, onClose, onResumeSession }: SideMenuProps) {
                                         const isCurrentSession = session.id === currentConversationId;
                                         const sessionDate = new Date(session.created_at);
                                         const timeAgo = getRelativeTime(sessionDate);
-                                        
+
                                         return (
                                             <TouchableOpacity
                                                 key={session.id}
@@ -200,11 +200,11 @@ export function SideMenu({ isOpen, onClose, onResumeSession }: SideMenuProps) {
                                                 activeOpacity={0.7}
                                             >
                                                 <View style={styles.sessionItemContent}>
-                                                    <Text 
+                                                    <Text
                                                         style={[
                                                             styles.sessionTitle,
                                                             isCurrentSession && styles.sessionTitleActive
-                                                        ]} 
+                                                        ]}
                                                         numberOfLines={1}
                                                     >
                                                         {session.title || 'Untitled Session'}
@@ -229,10 +229,10 @@ export function SideMenu({ isOpen, onClose, onResumeSession }: SideMenuProps) {
                     {/* Footer */}
                     <View style={[styles.menuFooter, { paddingBottom: insets.bottom + 20 }]}>
                         <View style={styles.divider} />
-                        
+
                         {/* 🗓️ Calendar Connection (Q10C) */}
                         <CalendarConnectionItem />
-                        
+
                         <TouchableOpacity
                             style={styles.settingsItem}
                             activeOpacity={0.7}
@@ -272,7 +272,7 @@ function getRelativeTime(date: Date): string {
     if (diffHours < 24) return `${diffHours}h ago`;
     if (diffDays === 1) return 'Yesterday';
     if (diffDays < 7) return `${diffDays}d ago`;
-    
+
     return date.toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
 }
 
@@ -283,7 +283,7 @@ function CalendarConnectionItem() {
 
     const handlePress = async () => {
         Haptics.light();
-        
+
         if (isConnected) {
             // Disconnect
             await disconnect();
@@ -303,8 +303,8 @@ function CalendarConnectionItem() {
     };
 
     return (
-        <TouchableOpacity 
-            style={styles.settingsItem} 
+        <TouchableOpacity
+            style={styles.settingsItem}
             activeOpacity={0.7}
             onPress={handlePress}
             disabled={isLoading}
@@ -428,7 +428,7 @@ const styles = StyleSheet.create({
         color: '#666',
         fontWeight: '500',
     },
-    
+
     // 🕰️ Sessions Section
     sessionsSection: {
         marginTop: 24,
@@ -500,7 +500,7 @@ const styles = StyleSheet.create({
         fontSize: 8,
         color: '#6366f1',
     },
-    
+
     // 🗓️ Calendar Connection Styles (Q10C)
     calendarItemContent: {
         flex: 1,
@@ -525,7 +525,7 @@ const styles = StyleSheet.create({
         color: '#6366f1',
         fontWeight: '600',
     },
-    
+
     // Burger Button
     burgerButton: {
         width: 44,
